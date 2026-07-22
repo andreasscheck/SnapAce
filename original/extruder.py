@@ -1302,7 +1302,6 @@ class PrinterExtruder:
         action = None
         params = gcmd.get_command_parameters()
         is_grab_complete = False
-        ace = self.printer.lookup_object('ace', None)
         if 'ACTION' in params:
             action = params['ACTION']
 
@@ -1510,9 +1509,6 @@ class PrinterExtruder:
                     # if cur_extruder_state is not None and cur_extruder_state['state'] != 'PARKED':
                     #     raise gcmd.error("Abnormal state detection after extruder park, {}: {}".format(cur_extruder.name, cur_extruder_state))
 
-            if ace is not None:
-                ace._disable_feed_assist(self.extruder_num)
-                gcmd.respond_info("ACE disable feed_assist for extruder %s" % (self.name,))
             if action == 'PARK':
                 raise ExtruderParkAction("park action success!!!")
 
@@ -1684,11 +1680,6 @@ class PrinterExtruder:
                 toolhead.flush_step_generation()
                 toolhead.set_extruder(self, self.last_position)
                 self.printer.send_event("extruder:activate_extruder")
-                ace_gate = (None if ace is None else
-                            ace.gate_for_extruder(self.extruder_num))
-                if ace_gate is not None:
-                    ace._enable_feed_assist(ace_gate)
-                    gcmd.respond_info("ACE enable feed_assist for extruder %s" % (self.name,))
 
                 # binding probe
                 self.active_binding_probe()

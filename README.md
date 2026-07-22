@@ -51,6 +51,20 @@ This project provides integration of the Anycubic ACE PRO with the Snapmaker U1 
     *   *Goal:* The filament should stop approximately 5cm away from the toolhead after being fed from the ACE Pro gate.
 7.  **Restart:** Restart your printer to apply the changes.
 
+### Map extruders to ACE gates
+
+By default, every extruder uses the ACE gate with the same index. The mapping
+can be changed in `ace.cfg`:
+
+```ini
+[ace]
+extruder_gate_map: 0=2, 2=0
+```
+
+In this example, extruder 0 uses ACE gate 2 and extruder 2 uses ACE gate 0.
+Extruders 1 and 3 are not listed and therefore use the built-in feeder. Use
+`extruder_gate_map: none` to disable automatic ACE feeding for every extruder.
+
 ## Connection example
 <p>
     <img src="./.github/img/ACE_front.jpg" width="200" hspace="5" alt="alt text"/>

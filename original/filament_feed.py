@@ -187,10 +187,8 @@ class FeedLight:
             self.white_light.set_pwm(print_time, 0)
 
 class FeedPort:
-    def __init__(self, printer, reactor, pin, threshold, index):
+    def __init__(self, printer, reactor, pin, threshold):
         self.reactor = reactor
-        self.index = index
-        self.ace = None
         ppins = printer.lookup_object('pins')
         self._port = ppins.setup_pin('adc', pin)
         self._port_adc_value = 0
@@ -221,9 +219,6 @@ class FeedPort:
         else:
             self._filament_detected = False
 
-        if (self.ace is not None and
-                self.ace.manages_extruder(self.index)):
-            return
         if (None != self._port_event_callback and self._last_filament_detected != self._filament_detected):
             self._last_filament_detected = self._filament_detected
             self._port_event_callback(self._filament_detected)
@@ -231,14 +226,7 @@ class FeedPort:
     def get_adc_value(self):
         return self._port_adc_value
 
-    def add_ace(self, ace):
-        self.ace = ace
-
     def get_filament_detected(self):
-        if self.ace is not None:
-            gate = self.ace.gate_for_extruder(self.index)
-            if gate is not None:
-                return self.ace.gate_status[gate] == 1
         return self._filament_detected
 
 class FeedTachometer:
@@ -424,12 +412,12 @@ class FilamentFeed:
         self._port = []
         tmp_pin = config.get('port_ch_1_pin')
         threshold = config.getfloat('port_ch_1_threshold')
-        tmp_obj = FeedPort(self.printer, self.reactor, tmp_pin, threshold, self.filament_ch[0])
+        tmp_obj = FeedPort(self.printer, self.reactor, tmp_pin, threshold)
         tmp_obj.register_cb_2_port_event(self._port_ch1_event_handler)
         self._port.append(tmp_obj)
         tmp_pin = config.get('port_ch_2_pin')
         threshold = config.getfloat('port_ch_2_threshold')
-        tmp_obj = FeedPort(self.printer, self.reactor, tmp_pin, threshold, self.filament_ch[1])
+        tmp_obj = FeedPort(self.printer, self.reactor, tmp_pin, threshold)
         tmp_obj.register_cb_2_port_event(self._port_ch2_event_handler)
         self._port.append(tmp_obj)
         self.gcode.register_mux_command("FEED_PORT", "MODULE",
@@ -518,8 +506,6 @@ class FilamentFeed:
         self.coil_freq_threshold_hard = config.getint('coil_freq_thershold_hard', FEED_COIL_FREQ_THERSHOLD_HARD, minval=100)
         self.check_wheel_data = config.getint('check_wheel_data', 1)
         self.check_coil_freq = config.getint('check_coil_freq', 1)
-        self.channel_wait_timeout = config.getfloat(
-            'channel_wait_timeout', 120., above=0.)
         if self.check_coil_freq == 0 and self.check_wheel_data == 0:
             raise Exception("check_wheel_data and check_coil_freq can not be both 0")
 
@@ -556,17 +542,9 @@ class FilamentFeed:
     def _ready(self):
         self.toolhead = self.printer.lookup_object('toolhead')
         self.gcode_move = self.printer.lookup_object('gcode_move')
-        self.ace = self.printer.lookup_object('ace', None)
-        for port in self._port:
-            port.add_ace(self.ace)
         self.exception_manager = self.printer.lookup_object('exception_manager', None)
         self.reactor.update_timer(self._check_init_state_timer,
                                   self.reactor.monotonic() + 2 * FEED_PORT_ADC_REPORT_TIME)
-
-    def _ace_gate(self, channel):
-        if self.ace is None:
-            return None
-        return self.ace.gate_for_extruder(self.filament_ch[channel])
 
     def _runout_evt_handle(self, extruder, present):
         if present == True:
@@ -584,8 +562,7 @@ class FilamentFeed:
         self.reactor.unregister_timer(self._check_init_state_timer)
 
         for ch in range(FEED_CHANNEL_NUMS):
-            if (self._port[ch].get_adc_value() < FEED_PORT_ADC_VAL_MODULE_EXIST
-                    or self._ace_gate(ch) is not None):
+            if self._port[ch].get_adc_value() < FEED_PORT_ADC_VAL_MODULE_EXIST:
                 self.module_exist[ch] = True
             else:
                 self.module_exist[ch] = False
@@ -766,12 +743,7 @@ class FilamentFeed:
             wheel_cnt_a_1 = self.wheel[ch].get_counts()
             wheel_cnt_b_1 = self.wheel_2[ch].get_counts()
 
-        channel_wait_deadline = (
-            self.reactor.monotonic() + self.channel_wait_timeout)
-        while self.channel_active is not None:
-            if self.reactor.monotonic() >= channel_wait_deadline:
-                raise RuntimeError(
-                    'Timed out waiting for active filament-feed channel')
+        while self.channel_active != None:
             self.reactor.pause(self.reactor.monotonic() + 0.1)
         self.channel_active = ch
         self.channel_error[ch] = FEED_OK
@@ -783,8 +755,6 @@ class FilamentFeed:
         motor_dir = FEED_MOTOR_DIR_A
         if ch == FEED_CHANNEL_2:
             motor_dir = FEED_MOTOR_DIR_B
-        ace_gate = self._ace_gate(ch)
-        use_ace = ace_gate is not None
 
         try:
             # update auto-mode
@@ -1024,48 +994,32 @@ class FilamentFeed:
                         motor_err_max_cnt = FEED_LOAD_MOTOR_ERR_CNT_MAX
                         wheel_err_max_cnt = FEED_LOAD_WHEEL_ERR_CNT_MAX
                         one_step_cnt = self.wheel[ch].ppr * 2.0 * 10.0 / FEED_WHEEL_CIRCUMFERENCE
-                        if use_ace:
-                            self.ace._feed(ace_gate, 100, 20, 0)
 
                         while 1:
-                            if not use_ace:
-                                wheel_cnt_a_1 = self.wheel[ch].get_counts()
-                                wheel_cnt_b_1 = self.wheel_2[ch].get_counts()
-                                motor_cnt_1 = self.motor_tachometer.get_counts()
-                                self.motor.run_one_cycle(motor_dir, duty, period)
+                            wheel_cnt_a_1 = self.wheel[ch].get_counts()
+                            wheel_cnt_b_1 = self.wheel_2[ch].get_counts()
+                            motor_cnt_1 = self.motor_tachometer.get_counts()
+                            self.motor.run_one_cycle(motor_dir, duty, period)
                             self.reactor.pause(self.reactor.monotonic() + 0.105)
-                            if not use_ace:
-                                systime_2 = self.reactor.monotonic()
-                                motor_cnt_2 = self.motor_tachometer.get_counts()
-                                wheel_cnt_a_2 = self.wheel[ch].get_counts()
-                                wheel_cnt_b_2 = self.wheel_2[ch].get_counts()
+                            systime_2 = self.reactor.monotonic()
+                            motor_cnt_2 = self.motor_tachometer.get_counts()
+                            wheel_cnt_a_2 = self.wheel[ch].get_counts()
+                            wheel_cnt_b_2 = self.wheel_2[ch].get_counts()
                             port_detect = self._port[ch].get_filament_detected()
                             runout_detect = self.runout_sensor[ch].get_status(0)['filament_detected']
-                            if not use_ace:
-                                logging.info("[feed_loading] phase2: duty:%f, period:%f, "
-                                             "wheel, cnt_a_0:%d, cnt_a_1:%d, cnt_a_2:%d, cnt_b_0:%d, cnt_b_1:%d, cnt_b_2:%d, cnterr:%d, "
-                                             "motor, cnt_0:%d, cnt_1:%d, cnt_2:%d, cnterr:%d",
-                                             duty, period,
-                                             wheel_cnt_a_0, wheel_cnt_a_1, wheel_cnt_a_2, wheel_cnt_b_0, wheel_cnt_b_1, wheel_cnt_b_2, wheel_err_max_cnt,
-                                             motor_cnt_1, motor_cnt_2, motor_cnt_2 - motor_cnt_1, motor_err_max_cnt)
+                            logging.info("[feed_loading] phase2: duty:%f, period:%f, "
+                                         "wheel, cnt_a_0:%d, cnt_a_1:%d, cnt_a_2:%d, cnt_b_0:%d, cnt_b_1:%d, cnt_b_2:%d, cnterr:%d, "
+                                         "motor, cnt_0:%d, cnt_1:%d, cnt_2:%d, cnterr:%d",
+                                         duty, period,
+                                         wheel_cnt_a_0, wheel_cnt_a_1, wheel_cnt_a_2, wheel_cnt_b_0, wheel_cnt_b_1, wheel_cnt_b_2, wheel_err_max_cnt,
+                                         motor_cnt_1, motor_cnt_2, motor_cnt_2 - motor_cnt_1, motor_err_max_cnt)
                             if runout_detect == True:
-                                if use_ace:
-                                    self.ace._stop_feeding(ace_gate)
                                 self.channel_error[ch] = FEED_OK
-                                break
-                            if use_ace and (
-                                    self.ace.is_ace_ready() or
-                                    self.reactor.monotonic() - systime_0 >
-                                    FEED_LOAD_TIMEOUT_TIME):
-                                self.channel_error[ch] = FEED_ERR_TIMEOUT
-                                self.exception_code[ch] = 34
                                 break
                             if port_detect == False:
                                 self.channel_error[ch] = FEED_ERR_NO_FILAMENT
                                 self.exception_code[ch] = 33
                                 break
-                            if use_ace:
-                                continue
                             if systime_2 - systime_0 > FEED_LOAD_TIMEOUT_TIME:
                                 self.channel_error[ch] = FEED_ERR_TIMEOUT
                                 self.exception_code[ch] = 34
@@ -1106,8 +1060,6 @@ class FilamentFeed:
                             self._hang_neutral(ch)
                             raise ValueError('logic error!')
 
-                    if use_ace:
-                        self.ace._enable_feed_assist(ace_gate)
                     self.gcode.run_script_from_command("M104 S%d\r\n" % (filament_feed_temp))
                     try:
                         self.toolhead.wait_moves()
@@ -1279,9 +1231,6 @@ class FilamentFeed:
 
             # unload
             elif action == FEED_ACT_UNLOAD:
-                if use_ace:
-                    self.ace._disable_feed_assist()
-
                 self.exception_code[ch] = 70
                 if stage not in [None, FEED_UNLOAD_STAGE_PREPARE, FEED_UNLOAD_STAGE_DOING,
                                  FEED_UNLOAD_STAGE_CANCEL]:
@@ -1365,8 +1314,6 @@ class FilamentFeed:
                         # finish
                         self.toolhead.wait_moves()
                         self.gcode.run_script_from_command("M104 S0\r\n")
-                        if use_ace:
-                            self.ace.retract_fil(ace_gate)
                         self.channel_error[ch] = FEED_OK
                         self._set_channel_state(ch, FEED_STA_UNLOAD_FINISH)
 
@@ -1982,3 +1929,4 @@ class FilamentFeed:
 
 def load_config_prefix(config):
     return FilamentFeed(config)
+
