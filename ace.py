@@ -45,7 +45,7 @@ class BunnyAce:
             config.error("There is no [save_variables] in the config. Check installation guide")
 
 
-        self.serial_id = config.get('serial', '/dev/ttyACM0')
+        self.serial_id = config.get('serial', '/dev/serial/by-id/usb-ANYCUBIC_ACE_1-if00')
         self.baud = config.getint('baud', 115200)
 
         self.feed_speed = config.getint('feed_speed', 50)
