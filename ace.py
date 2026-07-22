@@ -53,10 +53,24 @@ class BunnyAce:
         self.retract_length = config.getint('retract_length', 100)
         self.feed_length = config.getint('feed_length', 100)
         self.max_dryer_temperature = config.getint('max_dryer_temperature', 55)
+        self.operation_timeout = config.getfloat(
+            'operation_timeout', 30., above=0.)
+        try:
+            self.extruder_gate_map = self._parse_extruder_gate_map(
+                config.get(
+                    'extruder_gate_map', '0=0, 1=1, 2=2, 3=3'))
+        except ValueError as e:
+            raise config.error(str(e))
 
         self._callback_map = {}
         self._feed_assist_index = -1
         self._request_id = 0
+        self._op_queue = queue.Queue()
+        self._op_running = False
+        self._op_worker_scheduled = False
+        self._last_operation_error = None
+        self._desired_feed_assist_index = -1
+        self._assist_reconcile_scheduled = False
 
         # Default data to prevent exceptions
         self._info = {
@@ -134,6 +148,9 @@ class BunnyAce:
         self.gcode.register_command(
             'ACE_RETRACT', self.cmd_ACE_RETRACT,
             desc=self.cmd_ACE_RETRACT_help)
+        self.gcode.register_command(
+            'ACE_CHECK_JSON_STATUS', self.cmd_ACE_CHECK_JSON_STATUS,
+            desc=self.cmd_ACE_CHECK_JSON_STATUS_help)
 
     def _handle_ready(self):
         self.toolhead = self.printer.lookup_object('toolhead')
@@ -202,7 +219,10 @@ class BunnyAce:
     def _serial_disconnect(self):
         if self._serial is not None and self._serial.is_open:
             self._serial.close()
-            self._connected = False
+        self._connected = False
+        self._feed_assist_index = -1
+        self._callback_map.clear()
+        self._cancel_pending_jobs('ACE disconnected')
         if self.heartbeat_timer:
             self.reactor.unregister_timer(self.heartbeat_timer)
         if self.ace_dev_fd:
@@ -240,8 +260,8 @@ class BunnyAce:
                 self.heartbeat_timer = self.reactor.register_timer(self._periodic_heartbeat_event, self.reactor.NOW)
                 self.send_request(request={"method": "get_info"},
                                   callback=lambda self, response: info_callback(self, response))
-                if self._feed_assist_index != -1:
-                    self._enable_feed_assist(self._feed_assist_index)
+                if self._desired_feed_assist_index != -1:
+                    self._schedule_feed_assist_reconcile()
                 self.reactor.unregister_timer(self.connect_timer)
                 return self.reactor.NEVER
         except serial.serialutil.SerialException:
@@ -295,6 +315,8 @@ class BunnyAce:
             self.connect_timer = self.reactor.register_timer(self._connect, self.reactor.NOW)
 
     def _pre_load(self, gate):
+        if self.extruder_for_gate(gate) is None:
+            return
         self.log_always('Wait ACE preload')
         self.wait_ace_ready()
         self._feed(gate, self.feed_length, self.feed_speed, 0)
@@ -304,17 +326,22 @@ class BunnyAce:
         def callback(self, response):
             if response is not None:
                 for i in range(4):
-                    if self.gate_status[i] == GATE_EMPTY and response['result']['slots'][i]['status'] != 'empty':
+                    extruder_index = self.extruder_for_gate(i)
+                    if (extruder_index is not None and
+                            self.gate_status[i] == GATE_EMPTY and
+                            response['result']['slots'][i]['status'] != 'empty'):
                         self.log_always('auto_feed')
                         self.reactor.register_async_callback(
                             (lambda et, c=self._pre_load, gate=i: c(gate)))
 
-                    if response['result']['slots'][i]['rfid'] == 2 and self._info['slots'][i]['rfid'] != 2:
+                    if (extruder_index is not None and
+                            response['result']['slots'][i]['rfid'] == 2 and
+                            self._info['slots'][i]['rfid'] != 2):
                         self.log_always('find_rfid')
                         spool_inf = response['result']['slots'][i]
                         self.log_always(str(spool_inf))
                         self.gcode.run_script_from_command(f'SET_PRINT_FILAMENT_CONFIG '
-                                                           f'CONFIG_EXTRUDER={i} '
+                                                           f'CONFIG_EXTRUDER={extruder_index} '
                                                            f'FILAMENT_TYPE="{spool_inf.get("type", "PLA")}" '                                               
                                                            f'FILAMENT_COLOR_RGBA={self.rgb2hex(*spool_inf.get("color", (0,0,0)))} '
                                                            f'VENDOR="{spool_inf.get("brand", "Generic")}" '
@@ -405,18 +432,238 @@ class BunnyAce:
         self._callback_map[msg_id] = callback
         request['id'] = msg_id
         self._send_request(request)
+        return msg_id
 
-    def wait_ace_ready(self):
-        while self._info['status'] != 'ready':
-            curr_ts = self.reactor.monotonic()
-            self.reactor.pause(curr_ts + 0.5)
+    def _wait_until(self, predicate, description, timeout=None):
+        if timeout is None:
+            timeout = self.operation_timeout
+        deadline = self.reactor.monotonic() + timeout
+        while not predicate():
+            if not self._connected:
+                raise AceException(
+                    f'ACE disconnected while waiting for {description}')
+            now = self.reactor.monotonic()
+            if now >= deadline:
+                raise AceException(f'ACE timeout while waiting for {description}')
+            self.reactor.pause(min(now + 0.1, deadline))
+
+    def wait_ace_ready(self, timeout=None):
+        self._wait_until(
+            lambda: self._info['status'] == 'ready', 'ready status', timeout)
+
+    def _request_and_wait(self, request, timeout=None):
+        result = {'done': False, 'response': None}
+
+        def callback(self, response):
+            result['response'] = response
+            result['done'] = True
+
+        self.wait_ace_ready(timeout)
+        msg_id = self.send_request(request=request, callback=callback)
+        try:
+            self._wait_until(
+                lambda: result['done'], f"response to {request.get('method')}",
+                timeout)
+        except Exception:
+            self._callback_map.pop(msg_id, None)
+            raise
+
+        response = result['response'] or {}
+        if response.get('code', 0) != 0:
+            raise AceException(
+                f"ACE {request.get('method')} failed: {response.get('msg')}")
+        return response
 
     def is_ace_ready(self):
         return self._info['status'] == 'ready'
 
+    @staticmethod
+    def _parse_extruder_gate_map(value):
+        value = value.strip()
+        mapping = [None, None, None, None]
+        if value.lower() in ('', 'none', 'off'):
+            return mapping
+        try:
+            for item in value.split(','):
+                if not item.strip():
+                    continue
+                extruder, gate = item.split('=', 1)
+                extruder = int(extruder.strip())
+                gate = int(gate.strip())
+                if extruder < 0 or extruder >= len(mapping):
+                    raise ValueError(
+                        'extruder indexes in extruder_gate_map must be '
+                        'between 0 and 3')
+                if gate < 0 or gate >= len(mapping):
+                    raise ValueError(
+                        'ACE gate indexes in extruder_gate_map must be '
+                        'between 0 and 3')
+                if mapping[extruder] is not None:
+                    raise ValueError(
+                        f'duplicate extruder index in extruder_gate_map: '
+                        f'{extruder}')
+                mapping[extruder] = gate
+        except (TypeError, ValueError):
+            raise ValueError(
+                'extruder_gate_map must use EXTRUDER=GATE entries, for '
+                'example: 0=2, 2=0')
+        assigned_gates = [gate for gate in mapping if gate is not None]
+        if len(set(assigned_gates)) != len(assigned_gates):
+            raise ValueError(
+                'each ACE gate may only be assigned to one extruder')
+        return mapping
+
+    def manages_extruder(self, index):
+        return self.gate_for_extruder(index) is not None
+
+    def gate_for_extruder(self, index):
+        if index < 0 or index >= len(self.extruder_gate_map):
+            return None
+        return self.extruder_gate_map[index]
+
+    def extruder_for_gate(self, gate):
+        for extruder, mapped_gate in enumerate(self.extruder_gate_map):
+            if mapped_gate == gate:
+                return extruder
+        return None
+
+    @staticmethod
+    def _json_safe(value):
+        """Return a status value accepted by Klipper's strict JSON encoder."""
+        if isinstance(value, dict):
+            return {
+                str(key): BunnyAce._json_safe(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, (list, tuple)):
+            return [BunnyAce._json_safe(item) for item in value]
+        return value
+
+    @staticmethod
+    def _find_non_string_keys(value, path='$'):
+        problems = []
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if not isinstance(key, str):
+                    problems.append(
+                        f'{path}: {type(key).__name__} key {key!r}')
+                child_path = f'{path}.{key}'
+                problems.extend(BunnyAce._find_non_string_keys(
+                    item, child_path))
+        elif isinstance(value, (list, tuple)):
+            for index, item in enumerate(value):
+                problems.extend(BunnyAce._find_non_string_keys(
+                    item, f'{path}[{index}]'))
+        return problems
+
+    cmd_ACE_CHECK_JSON_STATUS_help = (
+        'Checks all printer status objects for non-string dictionary keys')
+
+    def cmd_ACE_CHECK_JSON_STATUS(self, gcmd):
+        eventtime = self.reactor.monotonic()
+        problems = []
+        checked = 0
+        for name, obj in self.printer.lookup_objects():
+            get_status = getattr(obj, 'get_status', None)
+            if get_status is None:
+                continue
+            try:
+                status = get_status(eventtime)
+            except Exception as e:
+                logging.info(
+                    'ACE JSON status check skipped %s: %s', name, e)
+                continue
+            checked += 1
+            for problem in self._find_non_string_keys(status):
+                problems.append(f'{name}{problem[1:]}')
+
+        if problems:
+            message = 'Non-string JSON dictionary keys: ' + '; '.join(problems)
+            logging.error('ACE: %s', message)
+            gcmd.respond_info(message)
+            return
+        message = f'ACE JSON status check: {checked} objects OK'
+        logging.info(message)
+        gcmd.respond_info(message)
+
     def dwell(self, delay=1.0):
         curr_ts = self.reactor.monotonic()
         self.reactor.pause(curr_ts + delay)
+
+    def _enqueue_ace_job(self, fn, *args, **kwargs):
+        wait = kwargs.pop('_wait', False)
+        name = kwargs.pop('_job_name', getattr(fn, '__name__', 'operation'))
+        job = {
+            'fn': fn,
+            'args': args,
+            'kwargs': kwargs,
+            'name': name,
+            'done': False,
+            'cancelled': False,
+            'error': None,
+        }
+        self._op_queue.put(job)
+        if not self._op_worker_scheduled:
+            self._op_worker_scheduled = True
+            self.reactor.register_async_callback(self._run_next_ace_job)
+        if wait:
+            self._wait_for_ace_job(job)
+        return job
+
+    def _wait_for_ace_job(self, job):
+        try:
+            self._wait_until(
+                lambda: job['done'], f"queued job {job['name']}",
+                self.operation_timeout)
+        except Exception:
+            job['cancelled'] = True
+            raise
+        if job['error'] is not None:
+            raise AceException(
+                f"ACE job {job['name']} failed: {job['error']}")
+
+    def _cancel_pending_jobs(self, reason):
+        while True:
+            try:
+                job = self._op_queue.get_nowait()
+            except queue.Empty:
+                break
+            job['cancelled'] = True
+            job['done'] = True
+            job['error'] = AceException(reason)
+        self._assist_reconcile_scheduled = False
+
+    def _run_next_ace_job(self, eventtime):
+        self._op_worker_scheduled = False
+        if self._op_running:
+            return
+
+        try:
+            job = self._op_queue.get_nowait()
+        except queue.Empty:
+            return
+
+        self._op_running = True
+        try:
+            if not job['cancelled']:
+                job['fn'](*job['args'], **job['kwargs'])
+        except Exception as e:
+            job['error'] = e
+            self._last_operation_error = str(e)
+            self.log_error(f"ACE queued job {job['name']} failed: {e}")
+            try:
+                self.printer.send_event(
+                    'ace:operation_error', job['name'], str(e))
+            except Exception:
+                logging.exception('ACE: unable to publish operation error')
+            logging.exception('ACE: queued job %s failed', job['name'])
+        finally:
+            job['done'] = True
+            self._op_running = False
+
+        if not self._op_queue.empty() and not self._op_worker_scheduled:
+            self._op_worker_scheduled = True
+            self.reactor.register_async_callback(self._run_next_ace_job)
 
     def _extruder_move(self, length, speed):
         pos = self.toolhead.get_position()
@@ -435,43 +682,76 @@ class BunnyAce:
         if temperature <= 0 or temperature > self.max_dryer_temperature:
             raise gcmd.error('Wrong temperature')
 
-        def callback(self, response):
-            if response.get('code', 0) != 0:
-                self.log_error(f"ACE Error: {response.get('msg')}")
-                return
+        self._enqueue_ace_job(
+            self._start_drying_impl, temperature, duration,
+            _wait=True, _job_name='start drying')
 
-            self.gcode.respond_info('Started ACE drying')
-
-        self.wait_ace_ready()
-        self.send_request(
-            request={"method": "drying", "params": {"temp": temperature, "fan_speed": 7000, "duration": duration}},
-            callback=callback)
+    def _start_drying_impl(self, temperature, duration):
+        self._request_and_wait({
+            "method": "drying",
+            "params": {
+                "temp": temperature,
+                "fan_speed": 7000,
+                "duration": duration,
+            },
+        })
+        self.gcode.respond_info('Started ACE drying')
 
     cmd_ACE_STOP_DRYING_help = 'Stops ACE Pro dryer'
 
     def cmd_ACE_STOP_DRYING(self, gcmd):
-        def callback(self, response):
-            if response.get('code', 0) != 0:
-                self.log_error(f"ACE Error: {response.get('msg')}")
-                return
+        self._enqueue_ace_job(
+            self._stop_drying_impl, _wait=True, _job_name='stop drying')
 
-            self.gcode.respond_info('Stopped ACE drying')
-
-        self.wait_ace_ready()
-        self.send_request(request={"method": "drying_stop"}, callback=callback)
+    def _stop_drying_impl(self):
+        self._request_and_wait({"method": "drying_stop"})
+        self.gcode.respond_info('Stopped ACE drying')
 
     def _enable_feed_assist(self, index):
-        def callback(self, response):
-            if response.get('code', 0) != 0:
-                self.log_error(f"ACE Error: {response.get('msg')}")
-            else:
-                self._feed_assist_index = index
+        self._validate_index(index)
+        self._desired_feed_assist_index = index
+        self._schedule_feed_assist_reconcile()
 
+    def _schedule_feed_assist_reconcile(self):
+        if self._assist_reconcile_scheduled:
+            return
+        self._assist_reconcile_scheduled = True
+        self._enqueue_ace_job(
+            self._reconcile_feed_assist,
+            _job_name='reconcile feed assist')
+
+    def _reconcile_feed_assist(self):
+        completed = False
+        try:
+            while self._feed_assist_index != self._desired_feed_assist_index:
+                if self._feed_assist_index != -1:
+                    self._disable_feed_assist_impl()
+                    continue
+                if self._desired_feed_assist_index != -1:
+                    self._enable_feed_assist_impl(
+                        self._desired_feed_assist_index)
+            completed = True
+        finally:
+            self._assist_reconcile_scheduled = False
+            if completed and (
+                    self._feed_assist_index != self._desired_feed_assist_index):
+                self._schedule_feed_assist_reconcile()
+
+    def _validate_index(self, index):
+        if index < 0 or index >= 4:
+            raise AceException(f'Wrong ACE gate index: {index}')
+
+    def _enable_feed_assist_impl(self, index):
+        self._validate_index(index)
+        if self._feed_assist_index == index:
+            return
         if self._feed_assist_index != -1:
-            self.wait_ace_ready()
-            self._retract(self._feed_assist_index, 5, 10)
-        self.wait_ace_ready()
-        self.send_request(request={"method": "start_feed_assist", "params": {"index": index}}, callback=callback)
+            self._disable_feed_assist_impl()
+        self._request_and_wait({
+            "method": "start_feed_assist",
+            "params": {"index": index},
+        })
+        self._feed_assist_index = index
         self.dwell(delay=0.7)
 
     cmd_ACE_ENABLE_FEED_ASSIST_help = 'Enables ACE feed assist'
@@ -485,41 +765,45 @@ class BunnyAce:
         self._enable_feed_assist(index)
 
     def _disable_feed_assist(self, index=-1):
-        def callback(self, response):
-            if response.get('code', 0) != 0:
-                self.log_error(f"ACE Error: {response.get('msg')}")
-                return
+        if index != -1:
+            self._validate_index(index)
+        self._desired_feed_assist_index = -1
+        self._schedule_feed_assist_reconcile()
 
-            self._feed_assist_index = -1
-            self.gcode.respond_info('Disabled ACE feed assist')
-        rt_index = self._feed_assist_index
-        self.wait_ace_ready()
-        self.send_request(request={"method": "stop_feed_assist", "params": {"index": self._feed_assist_index}},
-                          callback=callback)
-        self.wait_ace_ready()
-        self._retract(rt_index, 5, 10)
+    def _disable_feed_assist_impl(self, index=-1):
+        active_index = self._feed_assist_index
+        if active_index == -1:
+            return
+        self._request_and_wait({
+            "method": "stop_feed_assist",
+            "params": {"index": active_index},
+        })
+        self._feed_assist_index = -1
+        self._retract_impl(active_index, 5, 10)
         self.dwell(0.3)
+        self.gcode.respond_info('Disabled ACE feed assist')
 
     cmd_ACE_DISABLE_FEED_ASSIST_help = 'Disables ACE feed assist'
 
     def cmd_ACE_DISABLE_FEED_ASSIST(self, gcmd):
         index = gcmd.get_int('INDEX', self._feed_assist_index)
 
-        if index < 0 or index >= 4:
+        if index != -1 and (index < 0 or index >= 4):
             raise gcmd.error('Wrong index')
 
         self._disable_feed_assist(index)
 
     def _feed(self, index, length, speed, how_wait=None):
-        def callback(self, response):
-            if response.get('code', 0) != 0:
-                self.log_error(f"ACE Error: {response.get('msg')}")
-                return
+        self._validate_index(index)
+        return self._enqueue_ace_job(
+            self._feed_impl, index, length, speed, how_wait,
+            _wait=True, _job_name=f'feed gate {index}')
 
-        self.wait_ace_ready()
-        self.send_request(
-            request={"method": "feed_filament", "params": {"index": index, "length": length, "speed": speed}},
-            callback=callback)
+    def _feed_impl(self, index, length, speed, how_wait=None):
+        self._request_and_wait({
+            "method": "feed_filament",
+            "params": {"index": index, "length": length, "speed": speed},
+        })
         if how_wait is not None:
             self.dwell(delay=(how_wait / speed) + 0.1)
         else:
@@ -542,19 +826,23 @@ class BunnyAce:
         self._feed(index, length, speed)
 
     def _retract(self, index, length, speed):
-        def callback(self, response):
-            if response.get('code', 0) != 0:
-                self.log_error(f"ACE Error: {response.get('msg')}")
-                return
+        self._validate_index(index)
+        return self._enqueue_ace_job(
+            self._retract_impl, index, length, speed,
+            _wait=True, _job_name=f'retract gate {index}')
 
-        self.wait_ace_ready()
-        self.send_request(
-            request={"method": "unwind_filament", "params": {"index": index, "length": length, "speed": speed}},
-            callback=callback)
+    def _retract_impl(self, index, length, speed):
+        self._request_and_wait({
+            "method": "unwind_filament",
+            "params": {"index": index, "length": length, "speed": speed},
+        })
         self.dwell(delay=(length / speed) + 0.1)
 
     def retract_fil(self, index):
-        self._retract(index, self.retract_length, self.retract_speed)
+        self._validate_index(index)
+        self._enqueue_ace_job(
+            self._retract_impl, index, self.retract_length,
+            self.retract_speed, _job_name=f'retract filament gate {index}')
 
     cmd_ACE_RETRACT_help = 'Retracts filament back to ACE'
 
@@ -573,33 +861,44 @@ class BunnyAce:
         self._retract(index, length, speed)
 
     def _set_feeding_speed(self, index, speed):
-        def callback(self, response):
-            if response.get('code', 0) != 0:
-                self.log_error(f"ACE Error: {response.get('msg')}")
+        self._validate_index(index)
+        return self._enqueue_ace_job(
+            self._set_feeding_speed_impl, index, speed, _wait=True,
+            _job_name=f'update feeding speed for gate {index}')
 
-        self.send_request(
-            request={"method": "update_feeding_speed", "params": {"index": index, "speed": speed}},
-            callback=callback)
+    def _set_feeding_speed_impl(self, index, speed):
+        self._request_and_wait({
+            "method": "update_feeding_speed",
+            "params": {"index": index, "speed": speed},
+        })
 
     def _stop_feeding(self, index):
-        def callback(self, response):
-            if response.get('code', 0) != 0:
-                self.log_error(f"ACE Error: {response.get('msg')}")
-                return
+        self._validate_index(index)
+        return self._enqueue_ace_job(
+            self._stop_feeding_impl, index, _wait=True,
+            _job_name=f'stop feeding gate {index}')
 
-        self.send_request(
-            request={"method": "stop_feed_filament", "params": {"index": index}},
-            callback=callback)
+    def _stop_feeding_impl(self, index):
+        self._request_and_wait({
+            "method": "stop_feed_filament", "params": {"index": index},
+        })
 
     def get_status(self, eventtime=None):
-        return {
+        status = {
             'status': self._info['status'],
             'temp': self._info['temp'],
             'dryer_status': self._info['dryer_status'],
             'gate_status': self.gate_status,
+            'feed_assist_index': self._feed_assist_index,
+            'desired_feed_assist_index': self._desired_feed_assist_index,
+            'operation_queue_size': self._op_queue.qsize(),
+            'last_operation_error': self._last_operation_error,
         }
+        # The ACE status partly originates from device responses. Sanitize the
+        # complete public structure instead of relying on every nested mapping
+        # to already use string keys.
+        return self._json_safe(status)
 
 
 def load_config(config):
     return BunnyAce(config)
-
