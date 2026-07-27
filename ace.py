@@ -315,11 +315,13 @@ class BunnyAce:
             self.connect_timer = self.reactor.register_timer(self._connect, self.reactor.NOW)
 
     def _pre_load(self, gate):
-        if self.extruder_for_gate(gate) is None:
+        extruder = self.extruder_for_gate(gate)
+        if extruder is None:
             return
         self.log_always('Wait ACE preload')
         self.wait_ace_ready()
         self._feed(gate, self.feed_length, self.feed_speed, 0)
+        self.printer.send_event('ace:preload_complete', extruder)
         self.log_always("Select AutoLoad from the menu")
 
     def _periodic_heartbeat_event(self, eventtime):
