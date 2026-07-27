@@ -536,6 +536,8 @@ class FilamentFeed:
 
         self.printer.register_event_handler("klippy:ready", self._ready)
         self.printer.register_event_handler("filament_switch_sensor:runout", self._runout_evt_handle)
+        self.printer.register_event_handler(
+            "ace:preload_complete", self._ace_preload_complete)
         self._check_init_state_timer = self.reactor.register_timer(self._check_init_state_timer_handler)
 
         self._feed_preload_counts = int(preload_length / FEED_WHEEL_CIRCUMFERENCE * 2)
@@ -567,6 +569,28 @@ class FilamentFeed:
         if self.ace is None:
             return None
         return self.ace.gate_for_extruder(self.filament_ch[channel])
+
+    def _ace_preload_complete(self, extruder):
+        for channel in range(FEED_CHANNEL_NUMS):
+            if self.filament_ch[channel] != extruder:
+                continue
+
+            # An ACE mapping represents a feeder module even if the physical
+            # U1 feeder port is not connected.
+            self.module_exist[channel] = True
+            if self.config['auto_mode'][channel] == False:
+                return
+
+            self.printer.send_event(
+                "filament_feed:port", extruder, True)
+            if (self.runout_sensor[channel] is None or
+                    self.runout_sensor[channel].get_status(0)['enabled'] == False or
+                    self.manual_feeding[channel]):
+                return
+
+            if self.channel_state[channel] != FEED_STA_LOAD_FINISH:
+                self._set_channel_state(channel, FEED_STA_PRELOAD_FINISH)
+            return
 
     def _runout_evt_handle(self, extruder, present):
         if present == True:
@@ -965,6 +989,7 @@ class FilamentFeed:
 
             # load
             elif action == FEED_ACT_LOAD:
+                feed_assist_requested = False
                 try:
                     # prepare
                     self.exception_code[ch] = 30
@@ -1108,6 +1133,7 @@ class FilamentFeed:
 
                     if use_ace:
                         self.ace._enable_feed_assist(ace_gate)
+                        feed_assist_requested = True
                     self.gcode.run_script_from_command("M104 S%d\r\n" % (filament_feed_temp))
                     try:
                         self.toolhead.wait_moves()
@@ -1274,8 +1300,12 @@ class FilamentFeed:
                     raise
 
                 finally:
-                    self.gcode.run_script_from_command("M107\r\n")
-                    self.gcode.run_script_from_command("M104 S0\r\n")
+                    try:
+                        if feed_assist_requested:
+                            self.ace._disable_feed_assist()
+                    finally:
+                        self.gcode.run_script_from_command("M107\r\n")
+                        self.gcode.run_script_from_command("M104 S0\r\n")
 
             # unload
             elif action == FEED_ACT_UNLOAD:
