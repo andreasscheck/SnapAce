@@ -571,6 +571,9 @@ class FilamentFeed:
         return self.ace.gate_for_extruder(self.filament_ch[channel])
 
     def _ace_preload_complete(self, extruder):
+        self._ace_filament_available(extruder)
+
+    def _ace_filament_available(self, extruder):
         for channel in range(FEED_CHANNEL_NUMS):
             if self.filament_ch[channel] != extruder:
                 continue
@@ -1050,6 +1053,7 @@ class FilamentFeed:
                         wheel_err_max_cnt = FEED_LOAD_WHEEL_ERR_CNT_MAX
                         one_step_cnt = self.wheel[ch].ppr * 2.0 * 10.0 / FEED_WHEEL_CIRCUMFERENCE
                         if use_ace:
+                            self.ace.prepare_gate_for_load(ace_gate)
                             self.ace._feed(ace_gate, 100, 20, 0)
 
                         while 1:
@@ -1396,9 +1400,16 @@ class FilamentFeed:
                         self.toolhead.wait_moves()
                         self.gcode.run_script_from_command("M104 S0\r\n")
                         if use_ace:
-                            self.ace.retract_fil(ace_gate)
+                            self.ace.retract_fil(ace_gate, wait=True)
                         self.channel_error[ch] = FEED_OK
                         self._set_channel_state(ch, FEED_STA_UNLOAD_FINISH)
+                        if use_ace:
+                            # The spool is still available, but its filament
+                            # has been pulled back from the preload position.
+                            # Expose it to the U1 again; the next load restores
+                            # that position before the final feed phase.
+                            self._ace_filament_available(
+                                self.filament_ch[ch])
 
                     except:
                         self.toolhead.wait_moves()
@@ -1472,8 +1483,13 @@ class FilamentFeed:
 
                         self.toolhead.wait_moves()
                         self.gcode.run_script_from_command("M104 S0\r\n")
+                        if use_ace:
+                            self.ace.retract_fil(ace_gate, wait=True)
                         self.channel_error[ch] = FEED_OK
                         self._set_channel_state(ch, FEED_STA_UNLOAD_FINISH)
+                        if use_ace:
+                            self._ace_filament_available(
+                                self.filament_ch[ch])
 
                     except:
                         self.toolhead.wait_moves()
