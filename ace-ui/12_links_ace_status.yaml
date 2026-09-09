@@ -1,0 +1,6 @@
+links:
+  ace-status:
+    url: /ace/
+    icon: "🎛️"
+    label: ACE Status
+    condition: null

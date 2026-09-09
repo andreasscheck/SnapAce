@@ -18,6 +18,7 @@ GATE_AVAILABLE = 1  # Available to load from either buffer or spool
 
 class BunnyAce:
     VARS_ACE_REVISION = 'ace__revision'
+    VARS_GATE_PRELOADED = 'ace__gate_preloaded'
 
     def __init__(self, config):
         self._connected = False
@@ -44,6 +45,16 @@ class BunnyAce:
         else:
             config.error("There is no [save_variables] in the config. Check installation guide")
 
+        saved_gate_preloaded = self.save_variables.allVariables.get(
+            self.VARS_GATE_PRELOADED, [True, True, True, True])
+        if (not isinstance(saved_gate_preloaded, (list, tuple)) or
+                len(saved_gate_preloaded) != 4):
+            saved_gate_preloaded = [True, True, True, True]
+        # Gate availability only tells us that a spool is present.  Keep the
+        # persisted transport position separately so a load after an unload
+        # can restore the regular preload position, including after a restart.
+        self._gate_preloaded = [
+            bool(value) for value in saved_gate_preloaded]
 
         self.serial_id = config.get('serial', '/dev/serial/by-id/usb-ANYCUBIC_ACE_1-if00')
         self.baud = config.getint('baud', 115200)
@@ -129,6 +140,8 @@ class BunnyAce:
 
         self.printer.register_event_handler('klippy:ready', self._handle_ready)
         self.printer.register_event_handler('klippy:disconnect', self._handle_disconnect)
+        self.printer.register_event_handler(
+            'print_stats:stop', self._handle_print_stop)
 
         self.gcode.register_command(
             'ACE_START_DRYING', self.cmd_ACE_START_DRYING,
@@ -165,6 +178,12 @@ class BunnyAce:
         logging.info(f'ACE: Closing connection to {self.serial_id}')
         self._serial_disconnect()
         self._queue = None
+
+    def _handle_print_stop(self):
+        # A print may stop without parking or unloading the active extruder.
+        # Always clear the desired assist state so a pending enable cannot
+        # reactivate it after an abort.
+        self._disable_feed_assist()
 
     def _color_message(self, msg):
         try:
@@ -209,6 +228,16 @@ class BunnyAce:
         mmu_vars_revision = self.save_variables.allVariables.get(self.VARS_ACE_REVISION, 0) + 1
         self.gcode.run_script_from_command(
             f"SAVE_VARIABLE VARIABLE={self.VARS_ACE_REVISION} VALUE={mmu_vars_revision}")
+
+    def _set_gate_preloaded(self, index, preloaded):
+        preloaded = bool(preloaded)
+        if self._gate_preloaded[index] == preloaded:
+            return
+        self._gate_preloaded[index] = preloaded
+        if getattr(self, 'save_variables', None) is not None:
+            self.save_variable(
+                self.VARS_GATE_PRELOADED,
+                list(self._gate_preloaded), write=True)
 
     def _get_next_request_id(self) -> int:
         self._request_id += 1
@@ -321,6 +350,7 @@ class BunnyAce:
         self.log_always('Wait ACE preload')
         self.wait_ace_ready()
         self._feed(gate, self.feed_length, self.feed_speed, 0)
+        self._set_gate_preloaded(gate, True)
         self.printer.send_event('ace:preload_complete', extruder)
         self.log_always("Select AutoLoad from the menu")
 
@@ -350,6 +380,8 @@ class BunnyAce:
                                                            f'FILAMENT_SUBTYPE=""')
                     self.gate_status[i] = GATE_EMPTY if response['result']['slots'][i]['status'] == 'empty' \
                         else GATE_AVAILABLE
+                    if self.gate_status[i] == GATE_EMPTY:
+                        self._set_gate_preloaded(i, False)
                 self._info = response['result']
 
 
@@ -811,6 +843,14 @@ class BunnyAce:
         else:
             self.dwell(delay=(length / speed) + 0.1)
 
+    def prepare_gate_for_load(self, index):
+        """Restore the regular preload position after an ACE retract."""
+        self._validate_index(index)
+        if self._gate_preloaded[index]:
+            return
+        self._feed(index, self.feed_length, self.feed_speed, 0)
+        self._set_gate_preloaded(index, True)
+
     cmd_ACE_FEED_help = 'Feeds filament from ACE'
 
     def cmd_ACE_FEED(self, gcmd):
@@ -840,11 +880,16 @@ class BunnyAce:
         })
         self.dwell(delay=(length / speed) + 0.1)
 
-    def retract_fil(self, index):
+    def _retract_fil_impl(self, index):
+        self._retract_impl(
+            index, self.retract_length, self.retract_speed)
+        self._set_gate_preloaded(index, False)
+
+    def retract_fil(self, index, wait=False):
         self._validate_index(index)
-        self._enqueue_ace_job(
-            self._retract_impl, index, self.retract_length,
-            self.retract_speed, _job_name=f'retract filament gate {index}')
+        return self._enqueue_ace_job(
+            self._retract_fil_impl, index, _wait=wait,
+            _job_name=f'retract filament gate {index}')
 
     cmd_ACE_RETRACT_help = 'Retracts filament back to ACE'
 
@@ -891,6 +936,8 @@ class BunnyAce:
             'temp': self._info['temp'],
             'dryer_status': self._info['dryer_status'],
             'gate_status': self.gate_status,
+            'gate_extruder': [self.extruder_for_gate(i) for i in range(4)],
+            'slots': self._info['slots'],
             'feed_assist_index': self._feed_assist_index,
             'desired_feed_assist_index': self._desired_feed_assist_index,
             'operation_queue_size': self._op_queue.qsize(),

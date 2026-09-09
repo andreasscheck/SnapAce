@@ -559,6 +559,9 @@ class PrinterExtruder:
             self.vref_sw = self.printer.lookup_object("output_pin {}".format(config.get('vref_sw_pin')), None)
         self.print_config = self.printer.lookup_object('print_task_config', None)
         self.printing_e_pos = 0.0
+        # Factory mode
+        start_args = self.printer.get_start_args()
+        self.factory_mode = start_args.get('factory_mode', False)
         # handle flow calibration events
         self.is_calibrating_flow = False
         self.printer.register_event_handler("flow_calibration:begin", self._handle_flow_calibration_begin)
@@ -1263,7 +1266,7 @@ class PrinterExtruder:
                                 if len(extruder_list) > retry_extruder_id:
                                     switch_recorder.add_retry_count(extruder_list[retry_extruder_id].name)
                             self._cmd_SWITCH_EXTRUDER(gcmd, forced_park=True)
-                    need_skip_act = (retry_count+1 >= self.retry_switch_limit)
+                    need_skip_act = (retry_count+1 >= self.retry_switch_limit) and not self.factory_mode
                     self._cmd_SWITCH_EXTRUDER(gcmd, skip_act_check=need_skip_act)
                     break
 
