@@ -118,3 +118,31 @@ RFID/filament read) and `gate_extruder` mapping alongside the existing
   `/usr/local/share/firmware-config/functions/` to add the menu link.
 
 <img src="./.github/img/ace-status.png" />
+
+## Tool count cleanup (baked-in build only)
+
+Stock `fluidd.cfg` defines `[gcode_macro T4]` through `[gcode_macro T31]` —
+28 stub tool-change macros that just call `SWITCH_OF_EXTENDED_EXTRUDER`.
+`T0`-`T3` aren't macros there at all; Klipper registers those natively from
+the 4 real `[extruder]`/`[extruderN]` sections. The U1 only has 4 physical
+extruders, so Fluidd's Tools panel ends up showing 28 dead buttons
+alongside the 4 real ones.
+
+[scripts/build_custom_firmware.sh](scripts/build_custom_firmware.sh) removes
+those 28 stubs automatically, via
+[scripts/remove_unused_tool_macros.py](scripts/remove_unused_tool_macros.py)
+(no manual SSH steps — this one's baked-in only, since it patches a stock
+firmware file rather than shipping new ones).
+
+> [!NOTE]
+> This only takes effect on boot through Snapmaker's own
+> `origin_printer_data` → `/oem/printer_data` config sync
+> (`etc/init.d/S48setup-lava-env`), and that sync is skipped entirely if
+> `/oem/printer_data/.fluidd` or `/oem/.factory` already exists on the
+> printer (i.e. an already-set-up printer). Delete that marker before
+> flashing to force the sync, or copy the patched `fluidd.cfg` to
+> `/oem/printer_data/config/fluidd.cfg` by hand over SSH and restart Klipper.
+
+> [!WARNING]
+> If you have AFC hardware wired through lanes above index 3, skip this —
+> it removes the tool slots you'd need.

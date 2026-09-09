@@ -103,6 +103,25 @@ cp "$SNAPACE_DIR/ace-ui/html/"* "$UI_OVERLAY_DIR/root/usr/local/ace-ui/html/"
 cp "$SNAPACE_DIR/ace-ui/12_links_ace_status.yaml" \
   "$UI_OVERLAY_DIR/root/usr/local/share/firmware-config/functions/12_links_ace_status.yaml"
 
+echo ">> [3/4] add changes: remove unused tool-change stubs (T4-T31)"
+TOOLS_OVERLAY_DIR="$FIRMWARE_REPO_DIR/overlays/mods/$MOD_NAME/30-limit-tool-count"
+mkdir -p "$TOOLS_OVERLAY_DIR/patches"
+
+FLUIDD_REL="home/lava/origin_printer_data/config/fluidd.cfg"
+FLUIDD_STOCK="$STOCK_DIR/$FLUIDD_REL"
+work_dir="$(mktemp -d)"
+mkdir -p "$work_dir/rootfs.original/$(dirname "$FLUIDD_REL")" \
+         "$work_dir/rootfs/$(dirname "$FLUIDD_REL")"
+cp "$FLUIDD_STOCK" "$work_dir/rootfs.original/$FLUIDD_REL"
+python3 "$SNAPACE_DIR/scripts/remove_unused_tool_macros.py" \
+  "$FLUIDD_STOCK" "$work_dir/rootfs/$FLUIDD_REL"
+
+( cd "$work_dir" && diff -u \
+    "rootfs.original/$FLUIDD_REL" "rootfs/$FLUIDD_REL" || [[ $? -eq 1 ]] ) \
+  | sed "1s#.*#--- rootfs.original/$FLUIDD_REL#; 2s#.*#+++ rootfs/$FLUIDD_REL#" \
+  > "$TOOLS_OVERLAY_DIR/patches/01-remove-unused-tool-macros.patch"
+rm -rf "$work_dir"
+
 echo ">> [4/4] create image: build extended-$MOD_NAME"
 OUTPUT_FILE="firmware/U1_extended-$MOD_NAME.bin"
 rm -f "$FIRMWARE_REPO_DIR/$OUTPUT_FILE"
