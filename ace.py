@@ -142,7 +142,12 @@ class BunnyAce:
         self.printer.register_event_handler('klippy:disconnect', self._handle_disconnect)
         self.printer.register_event_handler(
             'print_stats:stop', self._handle_print_stop)
+        self.printer.register_event_handler(
+            'idle_timeout:printing', self._handle_printing)
 
+        self.gcode.register_command(
+            'ACE_SYNC_FEED_ASSIST', self.cmd_ACE_SYNC_FEED_ASSIST,
+            desc=self.cmd_ACE_SYNC_FEED_ASSIST_help)
         self.gcode.register_command(
             'ACE_START_DRYING', self.cmd_ACE_START_DRYING,
             desc=self.cmd_ACE_START_DRYING_help)
@@ -183,7 +188,47 @@ class BunnyAce:
         # A print may stop without parking or unloading the active extruder.
         # Always clear the desired assist state so a pending enable cannot
         # reactivate it after an abort.
+        self.log_always('ACE: print_stats:stop received, disabling feed assist')
         self._disable_feed_assist()
+
+    def _handle_printing(self, *args):
+        # idle_timeout:printing is fired with a print_time argument -
+        # accept and ignore any args since only the event itself matters.
+        self._sync_feed_assist_to_active_extruder()
+
+    def _sync_feed_assist_to_active_extruder(self):
+        # extruder.py only flips feed assist as a side effect of an actual
+        # extruder switch (park old, activate new). A print that starts
+        # with the right extruder already active - the common case on a
+        # single-extruder, ACE-fed printer - never goes through that path,
+        # so feed assist would otherwise silently stay off for the whole
+        # print. Explicitly sync it once printing actually starts instead
+        # of relying solely on switch transitions.
+        active_extruder = self.toolhead.get_extruder()
+        extruder_num = getattr(active_extruder, 'extruder_num', None)
+        if extruder_num is None:
+            # toolhead has no real PrinterExtruder active right now (e.g. a
+            # transient probing/dummy extruder mid-calibration). We can't
+            # tell intent from this alone, so leave feed assist as-is
+            # rather than force-disabling on incomplete information.
+            self.log_always(
+                'ACE: sync_feed_assist skipped, no extruder_num on active '
+                f'toolhead extruder ({getattr(active_extruder, "name", active_extruder)!r})')
+            return
+        gate = self.gate_for_extruder(extruder_num)
+        self.log_always(
+            f'ACE: sync_feed_assist extruder={extruder_num} -> gate={gate}')
+        if gate is not None:
+            self._enable_feed_assist(gate)
+        else:
+            self._disable_feed_assist()
+
+    cmd_ACE_SYNC_FEED_ASSIST_help = (
+        'Enables feed assist for the currently active extruder if it is '
+        'mapped to an ACE gate, disables it otherwise')
+
+    def cmd_ACE_SYNC_FEED_ASSIST(self, gcmd):
+        self._sync_feed_assist_to_active_extruder()
 
     def _color_message(self, msg):
         try:
@@ -932,6 +977,7 @@ class BunnyAce:
 
     def get_status(self, eventtime=None):
         status = {
+            'connected': self._connected,
             'status': self._info['status'],
             'temp': self._info['temp'],
             'dryer_status': self._info['dryer_status'],

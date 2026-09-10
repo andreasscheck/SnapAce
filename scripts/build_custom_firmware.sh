@@ -125,7 +125,39 @@ rm -rf "$work_dir"
 echo ">> [4/4] create image: build extended-$MOD_NAME"
 OUTPUT_FILE="firmware/U1_extended-$MOD_NAME.bin"
 rm -f "$FIRMWARE_REPO_DIR/$OUTPUT_FILE"
+
+# create_firmware.sh restores tmp/cache-chroot into $ROOTFS_DIR/cache before
+# applying overlays and saves it back after. On a second+ build with that
+# cache warm, some overlay step silently ends up installing ~148 fewer
+# files (~10MB smaller rootfs) - a structurally valid but incomplete image
+# the printer refuses to accept. Clearing it before each build costs
+# nothing (it's rebuilt from this run) and avoids the failure outright.
+rm -rf "$FIRMWARE_REPO_DIR/tmp/cache-chroot"
 ( cd "$FIRMWARE_REPO_DIR" && DOCKER_OPTS="--privileged" \
     ./dev.sh sudo make build "PROFILE=extended-$MOD_NAME" "OUTPUT_FILE=$OUTPUT_FILE" )
 
 echo ">> Done: $FIRMWARE_REPO_DIR/$OUTPUT_FILE"
+
+# A stale tmp/cache-chroot (or another persisted build cache) has once
+# before produced a silently truncated rootfs - ~10MB/148 files smaller,
+# still a structurally valid .bin, but one the printer refused to accept.
+# Flag a meaningfully smaller image than the previous build before it gets
+# to that stage.
+SIZE_RECORD="$FIRMWARE_REPO_DIR/firmware/.$MOD_NAME-last-size"
+NEW_SIZE="$(wc -c < "$FIRMWARE_REPO_DIR/$OUTPUT_FILE" | tr -d ' ')"
+
+if [[ -f "$SIZE_RECORD" ]]; then
+  PREV_SIZE="$(cat "$SIZE_RECORD")"
+  THRESHOLD=$(( PREV_SIZE * 98 / 100 ))
+  if [[ "$NEW_SIZE" -lt "$THRESHOLD" ]]; then
+    DELTA_MB=$(( (PREV_SIZE - NEW_SIZE) / 1024 / 1024 ))
+    echo ""
+    echo "!! WARNING: $OUTPUT_FILE is ${DELTA_MB}MB smaller than the previous build"
+    echo "!!   ($NEW_SIZE vs $PREV_SIZE bytes). That has previously meant a"
+    echo "!!   partial rootfs from stale build caches, not a real change -"
+    echo "!!   verify before flashing, or rebuild clean:"
+    echo "!!     rm -rf '$FIRMWARE_REPO_DIR/tmp' && bash '${BASH_SOURCE[0]}' $FIRMWARE_TAG"
+    echo ""
+  fi
+fi
+echo "$NEW_SIZE" > "$SIZE_RECORD"

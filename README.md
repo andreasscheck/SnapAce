@@ -79,6 +79,24 @@ the file to resolve by hand; see
 `overlays/mods/andreasscheck/10-snapace/README.md` in the firmware repo for
 how to regenerate the overlay's patches afterwards.
 
+### Faster iteration: push straight to a running printer
+
+For quick edit/test cycles, skip both the firmware build and the manual SSH
+copy above — [scripts/deploy_to_printer.sh](scripts/deploy_to_printer.sh)
+copies `ace.py`/`filament_feed.py`/`extruder.py` and the `/ace` UI straight
+to a printer that already has SSH enabled (see the firmware project's
+[SSH Access docs](https://github.com/paxx12-snapmaker-u1/SnapmakerU1-Extended-Firmware/blob/develop/docs/ssh_access.md)),
+then restarts the affected services:
+
+```bash
+scripts/deploy_to_printer.sh 192.168.1.100
+```
+
+Requires `sshpass` (`brew install hudochenkov/sshpass/sshpass`). Note it
+does a full `/etc/init.d/S60klipper restart`, not `FIRMWARE_RESTART` — the
+latter reuses the already-running Python process and won't pick up changed
+`.py` files, since the interpreter never re-imports them from disk.
+
 ### Map extruders to ACE gates
 
 By default, every extruder uses the ACE gate with the same index. The mapping

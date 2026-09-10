@@ -146,6 +146,16 @@ class AceQueueTests(unittest.TestCase):
         self.assertEqual(2, status['slots'][0]['rfid'])
         self.assertEqual([255, 0, 0], status['slots'][0]['color'])
 
+    def test_status_reports_actual_serial_connection_state(self):
+        ace = make_ace()
+        ace.gate_status = [0, 0, 0, 0]
+
+        ace._connected = False
+        self.assertFalse(ace.get_status()['connected'])
+
+        ace._connected = True
+        self.assertTrue(ace.get_status()['connected'])
+
     def test_non_string_key_diagnostic_reports_nested_path(self):
         value = {'valid': [{2: {'nested': True}}]}
 
@@ -220,6 +230,74 @@ class AceQueueTests(unittest.TestCase):
         self.assertEqual([2], calls)
         self.assertEqual(-1, ace._desired_feed_assist_index)
         self.assertEqual(-1, ace._feed_assist_index)
+
+    def test_handle_printing_accepts_klipper_event_argument(self):
+        # idle_timeout:printing is fired by Klipper with a print_time
+        # argument (see extras/idle_timeout.py's handle_sync_print_time) -
+        # a handler that only accepts `self` raises a TypeError that takes
+        # klippy down mid-print (regression: 2026-09-10).
+        ace = make_ace()
+        ace.extruder_gate_map = [None, None, None, None]
+        ace.toolhead = types.SimpleNamespace(
+            get_extruder=lambda: types.SimpleNamespace(extruder_num=0))
+
+        ace._handle_printing(123.456)  # must not raise
+
+    def test_sync_feed_assist_enables_for_mapped_active_extruder(self):
+        ace = make_ace()
+        ace.extruder_gate_map = [2, None, 0, None]
+        ace.toolhead = types.SimpleNamespace(
+            get_extruder=lambda: types.SimpleNamespace(extruder_num=0))
+        calls = []
+        ace._enable_feed_assist_impl = lambda index: (
+            calls.append(('enable', index)),
+            setattr(ace, '_feed_assist_index', index))
+
+        ace._sync_feed_assist_to_active_extruder()
+        ace.reactor.run_all()
+
+        self.assertEqual([('enable', 2)], calls)
+        self.assertEqual(2, ace._feed_assist_index)
+
+    def test_sync_feed_assist_disables_for_unmapped_active_extruder(self):
+        ace = make_ace()
+        ace.extruder_gate_map = [2, None, 0, None]
+        ace._feed_assist_index = 2
+        ace._desired_feed_assist_index = 2
+        ace.toolhead = types.SimpleNamespace(
+            get_extruder=lambda: types.SimpleNamespace(extruder_num=1))
+        calls = []
+        ace._disable_feed_assist_impl = lambda index=-1: (
+            calls.append(('disable', ace._feed_assist_index)),
+            setattr(ace, '_feed_assist_index', -1))
+
+        ace._sync_feed_assist_to_active_extruder()
+        ace.reactor.run_all()
+
+        self.assertEqual([('disable', 2)], calls)
+        self.assertEqual(-1, ace._feed_assist_index)
+
+    def test_sync_feed_assist_leaves_state_alone_without_extruder_num(self):
+        # A transient toolhead extruder (e.g. mid-probing) with no
+        # extruder_num attribute is ambiguous, not "unmapped" - regression
+        # guard for a bug where this incorrectly force-disabled feed assist
+        # during bed-leveling/calibration mid-print (2026-09-10).
+        ace = make_ace()
+        ace.extruder_gate_map = [2, None, 0, None]
+        ace._feed_assist_index = 2
+        ace._desired_feed_assist_index = 2
+        ace.toolhead = types.SimpleNamespace(
+            get_extruder=lambda: types.SimpleNamespace(name='probe'))
+        calls = []
+        ace._disable_feed_assist_impl = lambda index=-1: calls.append('disable')
+        ace._enable_feed_assist_impl = lambda index: calls.append('enable')
+
+        ace._sync_feed_assist_to_active_extruder()
+        ace.reactor.run_all()
+
+        self.assertEqual([], calls)
+        self.assertEqual(2, ace._feed_assist_index)
+        self.assertEqual(2, ace._desired_feed_assist_index)
 
     def test_retract_runs_after_previously_queued_disable(self):
         ace = make_ace()

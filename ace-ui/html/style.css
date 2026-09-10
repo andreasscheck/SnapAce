@@ -65,6 +65,19 @@ header h1 {
 }
 
 .ace-summary strong { color: var(--text); }
+.ace-summary strong.connected { color: var(--success); }
+.ace-summary strong.disconnected { color: var(--error); }
+
+.ace-disconnected-banner {
+    max-width: 1000px;
+    margin: 0 auto 20px;
+    padding: 10px 16px;
+    background: #4a2020;
+    border: 1px solid var(--error);
+    border-radius: 8px;
+    color: #ffb3b3;
+    font-size: 13px;
+}
 
 .content { max-width: 1000px; margin: 0 auto; }
 
@@ -112,6 +125,19 @@ header h1 {
     color: var(--muted);
 }
 
+.feed-assist-badge {
+    display: inline-block;
+    width: fit-content;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 12px;
+    background: var(--item);
+    color: var(--muted);
+}
+
+.feed-assist-badge.active { background: #2f4f2f; color: #a4e8a4; }
+.feed-assist-badge.pending { background: #4f4a2f; color: var(--warning); }
+
 .gate-body {
     display: grid;
     grid-template-columns: auto 1fr;
@@ -144,6 +170,27 @@ header h1 {
 }
 
 .rfid-badge.tagged { background: #2f4f2f; color: #a4e8a4; }
+
+.gate-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+}
+
+.gate-action-btn {
+    flex: 1;
+    padding: 6px 8px;
+    border: none;
+    border-radius: 6px;
+    background: var(--item);
+    color: var(--text);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.gate-action-btn:hover:not(:disabled) { background: var(--accent); }
+.gate-action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .gate-empty-msg {
     color: var(--muted);

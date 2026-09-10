@@ -12,12 +12,15 @@ let initialized = false;
 const GATE_EMPTY = 0;
 
 let cachedAce = {
+    connected: false,
     status: 'unknown',
     temp: 0,
     dryer_status: { status: 'stop', target_temp: 0, remain_time: 0 },
     gate_status: [0, 0, 0, 0],
     gate_extruder: [null, null, null, null],
     slots: [{}, {}, {}, {}],
+    feed_assist_index: -1,
+    desired_feed_assist_index: -1,
 };
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -39,6 +42,7 @@ function initializeWebSocket() {
         }).then(() => {
             wsReady = true;
             setConnectionStatus(true);
+            showStatus('');
             loadInitialData();
         }).catch(() => {
             showStatus('Failed to connect to Moonraker', 'error');
@@ -126,8 +130,29 @@ function colorHex(rgb) {
 }
 
 function render() {
+    renderDisconnectedBanner();
     renderSummary();
     renderGates();
+}
+
+// The header dot only reflects the browser's Moonraker WebSocket link -
+// the ACE unit itself connects over USB serial and can be unplugged or
+// powered off while Moonraker stays perfectly reachable. `cachedAce.connected`
+// is ace.py's own `self._connected` (the serial link), so surface it
+// separately rather than let the WebSocket dot imply the ACE is present.
+function renderDisconnectedBanner() {
+    let banner = document.getElementById('ace-disconnected-banner');
+    if (cachedAce.connected) {
+        if (banner) banner.remove();
+        return;
+    }
+    if (!banner) {
+        banner = document.createElement('div');
+        banner.id = 'ace-disconnected-banner';
+        banner.className = 'ace-disconnected-banner';
+        banner.textContent = 'ACE not connected (USB serial) — gate status below is stale.';
+        document.getElementById('ace-summary').insertAdjacentElement('beforebegin', banner);
+    }
 }
 
 function renderSummary() {
@@ -138,14 +163,19 @@ function renderSummary() {
         : 'Idle';
 
     el.innerHTML = '';
-    const addField = (label, value) => {
+    const addField = (label, html) => {
         const span = document.createElement('span');
-        span.innerHTML = `${escHtml(label)}: <strong>${escHtml(value)}</strong>`;
+        span.innerHTML = `${escHtml(label)}: ${html}`;
         el.appendChild(span);
     };
-    addField('Status', cachedAce.status || 'unknown');
-    addField('Temp', `${cachedAce.temp ?? 0}°C`);
-    addField('Dryer', dryerText);
+    const strong = (text, cls) => `<strong${cls ? ` class="${cls}"` : ''}>${escHtml(text)}</strong>`;
+
+    addField('ACE', cachedAce.connected
+        ? strong('Connected', 'connected')
+        : strong('Disconnected', 'disconnected'));
+    addField('Status', strong(cachedAce.status || 'unknown'));
+    addField('Temp', strong(`${cachedAce.temp ?? 0}°C`));
+    addField('Dryer', strong(dryerText));
 }
 
 function renderGates() {
@@ -188,12 +218,14 @@ function createGateCard(index, status, extruder, slot) {
         ? `→ Extruder ${extruder + 1}`
         : 'Not mapped to an extruder';
     card.appendChild(extruderLine);
+    card.appendChild(createFeedAssistBadge(index));
 
     if (!loaded) {
         const empty = document.createElement('div');
         empty.className = 'gate-empty-msg';
         empty.textContent = 'No spool detected';
         card.appendChild(empty);
+        card.appendChild(createGateActions(index));
         return card;
     }
 
@@ -230,12 +262,89 @@ function createGateCard(index, status, extruder, slot) {
     rfid.textContent = hasRfid ? 'RFID tag read' : 'No RFID data';
     card.appendChild(rfid);
 
+    card.appendChild(createGateActions(index));
+
     return card;
 }
+
+function createFeedAssistBadge(index) {
+    // Feed assist is a single shared mechanism - only one gate can have it
+    // active at a time. desired_feed_assist_index differing from
+    // feed_assist_index means a switch is queued/in flight.
+    const active = cachedAce.feed_assist_index === index;
+    const pending = !active && cachedAce.desired_feed_assist_index === index;
+
+    const badge = document.createElement('div');
+    badge.className = 'feed-assist-badge'
+        + (active ? ' active' : pending ? ' pending' : '');
+    badge.textContent = active
+        ? 'Feed Assist: On'
+        : pending ? 'Feed Assist: switching…' : 'Feed Assist: Off';
+    return badge;
+}
+
+const JOG_LENGTH_MM = 20; // 2cm
+
+function createGateActions(index) {
+    const actions = document.createElement('div');
+    actions.className = 'gate-actions';
+
+    const mkBtn = (text, handler) => {
+        const btn = document.createElement('button');
+        btn.className = 'gate-action-btn';
+        btn.textContent = text;
+        btn.disabled = !wsReady;
+        btn.addEventListener('click', handler);
+        return btn;
+    };
+
+    actions.appendChild(mkBtn('↧ Feed 2cm', () => feedGate(index)));
+    actions.appendChild(mkBtn('↥ Retract 2cm', () => retractGate(index)));
+    return actions;
+}
+
+async function sendGcode(script) {
+    try {
+        return await sendRPC('printer.gcode.script', { script });
+    } catch (error) {
+        if (error.message && error.message.includes('!!')) {
+            const m = error.message.match(/!!\s*(.+)/);
+            if (m) throw new Error(m[1]);
+        }
+        throw error;
+    }
+}
+
+async function feedGate(index) {
+    try {
+        showStatus(`Feeding gate ${index + 1}…`, 'info');
+        await sendGcode(`ACE_FEED INDEX=${index} LENGTH=${JOG_LENGTH_MM}`);
+        showStatus(`Gate ${index + 1} fed ${JOG_LENGTH_MM}mm`, 'success');
+    } catch (err) {
+        showStatus(`Feed failed: ${err.message}`, 'error');
+    }
+}
+
+async function retractGate(index) {
+    try {
+        showStatus(`Retracting gate ${index + 1}…`, 'info');
+        await sendGcode(`ACE_RETRACT INDEX=${index} LENGTH=${JOG_LENGTH_MM}`);
+        showStatus(`Gate ${index + 1} retracted ${JOG_LENGTH_MM}mm`, 'success');
+    } catch (err) {
+        showStatus(`Retract failed: ${err.message}`, 'error');
+    }
+}
+
+let statusClearTimer = null;
 
 function showStatus(message, type = 'info') {
     const el = document.getElementById('status-message');
     if (!el) return;
     el.textContent = message;
     el.className = `status-message status-${type}`;
+
+    clearTimeout(statusClearTimer);
+    if (type !== 'error' && message) {
+        statusClearTimer = setTimeout(() => { el.textContent = ''; }, 4000);
+    }
 }

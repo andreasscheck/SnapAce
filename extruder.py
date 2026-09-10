@@ -1515,7 +1515,9 @@ class PrinterExtruder:
 
             if ace is not None:
                 ace._disable_feed_assist(self.extruder_num)
-                gcmd.respond_info("ACE disable feed_assist for extruder %s" % (self.name,))
+                gcmd.respond_info(
+                    "ACE disable feed_assist for extruder %s (action=%s, forced_park=%s)"
+                    % (self.name, action, forced_park))
             if action == 'PARK':
                 raise ExtruderParkAction("park action success!!!")
 
