@@ -1335,7 +1335,15 @@ class FilamentFeed:
                 finally:
                     try:
                         if feed_assist_requested:
-                            self.ace._disable_feed_assist()
+                            # This FEED_ACT_LOAD can run mid-print (e.g. the
+                            # PRINT_AUTO_FEEDING top-off check near print
+                            # start), not just for a standalone manual load.
+                            # A blind disable here silently turned feed
+                            # assist off for the rest of the print, since
+                            # nothing re-enables it afterward - restore
+                            # whatever the currently active extruder needs
+                            # instead of always turning it off.
+                            self.ace._sync_feed_assist_to_active_extruder()
                     finally:
                         self.gcode.run_script_from_command("M107\r\n")
                         self.gcode.run_script_from_command("M104 S0\r\n")

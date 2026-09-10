@@ -239,6 +239,8 @@ header h1 {
 
 .gate-action-btn:hover:not(:disabled) { background: var(--accent); }
 .gate-action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.gate-action-btn.active { background: var(--success); color: #fff; }
+.gate-action-btn.active:hover:not(:disabled) { background: var(--error); }
 
 .gate-empty-msg {
     color: var(--muted);

@@ -322,18 +322,24 @@ function createGateActions(index) {
     const actions = document.createElement('div');
     actions.className = 'gate-actions';
 
-    const mkBtn = (text, handler, wide) => {
+    const mkBtn = (text, handler, wide, active) => {
         const btn = document.createElement('button');
-        btn.className = 'gate-action-btn' + (wide ? ' wide' : '');
+        btn.className = 'gate-action-btn' + (wide ? ' wide' : '') + (active ? ' active' : '');
         btn.textContent = text;
         btn.disabled = !wsReady;
         btn.addEventListener('click', handler);
         return btn;
     };
 
+    const feedAssistActive = cachedAce.feed_assist_index === index;
+
     actions.appendChild(mkBtn('↧ Feed 2cm', () => feedGate(index)));
     actions.appendChild(mkBtn('↥ Retract 2cm', () => retractGate(index)));
-    actions.appendChild(mkBtn('⚡ Enable Feed Assist', () => enableFeedAssist(index), true));
+    actions.appendChild(mkBtn(
+        feedAssistActive ? '⚡ Disable Feed Assist' : '⚡ Enable Feed Assist',
+        () => toggleFeedAssist(index, feedAssistActive),
+        true,
+        feedAssistActive));
     return actions;
 }
 
@@ -369,13 +375,19 @@ async function retractGate(index) {
     }
 }
 
-async function enableFeedAssist(index) {
+async function toggleFeedAssist(index, currentlyActive) {
     try {
-        showStatus(`Enabling feed assist for gate ${index + 1}…`, 'info');
-        await sendGcode(`ACE_ENABLE_FEED_ASSIST INDEX=${index}`);
-        showStatus(`Feed assist enabled for gate ${index + 1}`, 'success');
+        if (currentlyActive) {
+            showStatus(`Disabling feed assist for gate ${index + 1}…`, 'info');
+            await sendGcode(`ACE_DISABLE_FEED_ASSIST INDEX=${index}`);
+            showStatus(`Feed assist disabled for gate ${index + 1}`, 'success');
+        } else {
+            showStatus(`Enabling feed assist for gate ${index + 1}…`, 'info');
+            await sendGcode(`ACE_ENABLE_FEED_ASSIST INDEX=${index}`);
+            showStatus(`Feed assist enabled for gate ${index + 1}`, 'success');
+        }
     } catch (err) {
-        showStatus(`Enable feed assist failed: ${err.message}`, 'error');
+        showStatus(`Toggle feed assist failed: ${err.message}`, 'error');
     }
 }
 
