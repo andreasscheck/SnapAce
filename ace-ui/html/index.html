@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ACE Status</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+    <h1>ACE Status</h1>
+    <div class="status-bar">
+        Moonraker:
+        <span id="connection-status" class="status-dot disconnected"></span>
+        <span id="connection-text">Connecting…</span>
+    </div>
+</header>
+
+<div id="ace-summary" class="ace-summary"></div>
+
+<div id="dryer-controls" class="dryer-controls">
+    <label class="dryer-field">Temp (°C)
+        <input type="number" id="dryer-temp" value="55" min="1" step="1">
+    </label>
+    <label class="dryer-field">Duration (min)
+        <input type="number" id="dryer-duration" value="240" min="1" step="1">
+    </label>
+    <button id="dryer-start-btn" class="dryer-btn">Start Drying</button>
+    <button id="dryer-stop-btn" class="dryer-btn stop">Stop Drying</button>
+</div>
+
+<main class="content">
+    <div id="gates-grid" class="gates-grid"></div>
+    <div id="status-message" class="status-message"></div>
+</main>
+
+<script src="script.js"></script>
+</body>
+</html>
