@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Bakes this repo's ace.py / filament_feed.py / extruder.py into a
-# SnapmakerU1-Extended-Firmware build, as the `andreasscheck` mod overlay.
+# Bakes this repo's klipper/extras/{ace,filament_feed}.py and
+# klipper/kinematics/extruder.py into a SnapmakerU1-Extended-Firmware
+# build, as the `andreasscheck` mod overlay.
 #
 # Process:
 #   1. checkout firmware  - clone/fetch paxx12-snapmaker-u1/SnapmakerU1-Extended-Firmware
@@ -46,7 +47,7 @@ echo ">> [3/4] add changes: merge SnapAce onto stock $FIRMWARE_VERSION, regenera
 OVERLAY_DIR="$FIRMWARE_REPO_DIR/overlays/mods/$MOD_NAME/10-snapace"
 mkdir -p "$OVERLAY_DIR/patches" "$OVERLAY_DIR/root/home/lava/klipper/klippy/extras"
 
-cp "$SNAPACE_DIR/ace.py" "$OVERLAY_DIR/root/home/lava/klipper/klippy/extras/ace.py"
+cp "$SNAPACE_DIR/klipper/extras/ace.py" "$OVERLAY_DIR/root/home/lava/klipper/klippy/extras/ace.py"
 
 merge_and_patch() {
   local rel_path="$1"       # path under klipper/, e.g. klippy/extras/filament_feed.py
@@ -85,11 +86,13 @@ merge_and_patch() {
 }
 
 merge_and_patch "klippy/extras/filament_feed.py" \
-  "$SNAPACE_DIR/filament_feed.py" "$SNAPACE_DIR/original/filament_feed.py" \
+  "$SNAPACE_DIR/klipper/extras/filament_feed.py" \
+  "$SNAPACE_DIR/original/extras/filament_feed.py" \
   "01-filament-feed-ace-support"
 
 merge_and_patch "klippy/kinematics/extruder.py" \
-  "$SNAPACE_DIR/extruder.py" "$SNAPACE_DIR/original/extruder.py" \
+  "$SNAPACE_DIR/klipper/kinematics/extruder.py" \
+  "$SNAPACE_DIR/original/kinematics/extruder.py" \
   "02-extruder-ace-feed-assist"
 
 echo ">> [3/4] add changes: ACE status UI (/ace)"
@@ -98,9 +101,9 @@ mkdir -p "$UI_OVERLAY_DIR/root/etc/nginx/fluidd.d" \
          "$UI_OVERLAY_DIR/root/usr/local/ace-ui/html" \
          "$UI_OVERLAY_DIR/root/usr/local/share/firmware-config/functions"
 
-cp "$SNAPACE_DIR/ace-ui/ace.conf" "$UI_OVERLAY_DIR/root/etc/nginx/fluidd.d/ace.conf"
+cp "$SNAPACE_DIR/ace-ui/nginx/ace.conf" "$UI_OVERLAY_DIR/root/etc/nginx/fluidd.d/ace.conf"
 cp "$SNAPACE_DIR/ace-ui/html/"* "$UI_OVERLAY_DIR/root/usr/local/ace-ui/html/"
-cp "$SNAPACE_DIR/ace-ui/12_links_ace_status.yaml" \
+cp "$SNAPACE_DIR/ace-ui/firmware-config/12_links_ace_status.yaml" \
   "$UI_OVERLAY_DIR/root/usr/local/share/firmware-config/functions/12_links_ace_status.yaml"
 
 echo ">> [3/4] add changes: remove unused tool-change stubs (T4-T31)"

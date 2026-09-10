@@ -79,6 +79,52 @@ header h1 {
     font-size: 13px;
 }
 
+.dryer-controls {
+    max-width: 1000px;
+    margin: 0 auto 20px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    gap: 12px;
+    padding: 12px 16px;
+    background: var(--card);
+    border-radius: 8px;
+    border: 1px solid var(--border);
+}
+
+.dryer-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--muted);
+}
+
+.dryer-field input {
+    width: 90px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--item);
+    color: var(--text);
+    font-size: 13px;
+}
+
+.dryer-btn {
+    padding: 8px 14px;
+    border: none;
+    border-radius: 6px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.dryer-btn:hover { background: var(--accent-hover, var(--accent)); opacity: 0.9; }
+.dryer-btn.stop { background: var(--item); color: var(--text); }
+.dryer-btn.stop:hover { background: var(--error); color: #fff; }
+
 .content { max-width: 1000px; margin: 0 auto; }
 
 .gates-grid {
@@ -172,13 +218,15 @@ header h1 {
 .rfid-badge.tagged { background: #2f4f2f; color: #a4e8a4; }
 
 .gate-actions {
-    display: flex;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
     gap: 8px;
     margin-top: 4px;
 }
 
+.gate-action-btn.wide { grid-column: 1 / -1; }
+
 .gate-action-btn {
-    flex: 1;
     padding: 6px 8px;
     border: none;
     border-radius: 6px;

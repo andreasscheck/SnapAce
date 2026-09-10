@@ -18,6 +18,17 @@
 
 <div id="ace-summary" class="ace-summary"></div>
 
+<div id="dryer-controls" class="dryer-controls">
+    <label class="dryer-field">Temp (°C)
+        <input type="number" id="dryer-temp" value="55" min="1" step="1">
+    </label>
+    <label class="dryer-field">Duration (min)
+        <input type="number" id="dryer-duration" value="240" min="1" step="1">
+    </label>
+    <button id="dryer-start-btn" class="dryer-btn">Start Drying</button>
+    <button id="dryer-stop-btn" class="dryer-btn stop">Stop Drying</button>
+</div>
+
 <main class="content">
     <div id="gates-grid" class="gates-grid"></div>
     <div id="status-message" class="status-message"></div>

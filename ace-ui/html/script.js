@@ -27,7 +27,40 @@ document.addEventListener('DOMContentLoaded', () => {
     if (initialized) return;
     initialized = true;
     initializeWebSocket();
+    initializeDryerControls();
 });
+
+function initializeDryerControls() {
+    document.getElementById('dryer-start-btn').addEventListener('click', async () => {
+        const temp = parseInt(document.getElementById('dryer-temp').value, 10);
+        const duration = parseInt(document.getElementById('dryer-duration').value, 10);
+        if (!Number.isFinite(temp) || temp <= 0) {
+            showStatus('Enter a valid temperature', 'error');
+            return;
+        }
+        if (!Number.isFinite(duration) || duration <= 0) {
+            showStatus('Enter a valid duration', 'error');
+            return;
+        }
+        try {
+            showStatus(`Starting drying @ ${temp}°C for ${duration}min…`, 'info');
+            await sendGcode(`ACE_START_DRYING TEMP=${temp} DURATION=${duration}`);
+            showStatus('Drying started', 'success');
+        } catch (err) {
+            showStatus(`Start drying failed: ${err.message}`, 'error');
+        }
+    });
+
+    document.getElementById('dryer-stop-btn').addEventListener('click', async () => {
+        try {
+            showStatus('Stopping drying…', 'info');
+            await sendGcode('ACE_STOP_DRYING');
+            showStatus('Drying stopped', 'success');
+        } catch (err) {
+            showStatus(`Stop drying failed: ${err.message}`, 'error');
+        }
+    });
+}
 
 function initializeWebSocket() {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -289,9 +322,9 @@ function createGateActions(index) {
     const actions = document.createElement('div');
     actions.className = 'gate-actions';
 
-    const mkBtn = (text, handler) => {
+    const mkBtn = (text, handler, wide) => {
         const btn = document.createElement('button');
-        btn.className = 'gate-action-btn';
+        btn.className = 'gate-action-btn' + (wide ? ' wide' : '');
         btn.textContent = text;
         btn.disabled = !wsReady;
         btn.addEventListener('click', handler);
@@ -300,6 +333,7 @@ function createGateActions(index) {
 
     actions.appendChild(mkBtn('↧ Feed 2cm', () => feedGate(index)));
     actions.appendChild(mkBtn('↥ Retract 2cm', () => retractGate(index)));
+    actions.appendChild(mkBtn('⚡ Enable Feed Assist', () => enableFeedAssist(index), true));
     return actions;
 }
 
@@ -332,6 +366,16 @@ async function retractGate(index) {
         showStatus(`Gate ${index + 1} retracted ${JOG_LENGTH_MM}mm`, 'success');
     } catch (err) {
         showStatus(`Retract failed: ${err.message}`, 'error');
+    }
+}
+
+async function enableFeedAssist(index) {
+    try {
+        showStatus(`Enabling feed assist for gate ${index + 1}…`, 'info');
+        await sendGcode(`ACE_ENABLE_FEED_ASSIST INDEX=${index}`);
+        showStatus(`Feed assist enabled for gate ${index + 1}`, 'success');
+    } catch (err) {
+        showStatus(`Enable feed assist failed: ${err.message}`, 'error');
     }
 }
 

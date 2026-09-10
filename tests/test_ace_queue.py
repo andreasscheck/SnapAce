@@ -1,8 +1,11 @@
+import os
 import queue
 import sys
 import types
 import unittest
 
+sys.path.insert(0, os.path.join(
+    os.path.dirname(__file__), '..', 'klipper', 'extras'))
 
 if 'serial' not in sys.modules:
     serial = types.ModuleType('serial')

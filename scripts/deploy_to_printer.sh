@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Copies this repo's Klipper/UI files directly onto a running printer over
 # SSH and restarts the affected services - the fast loop for iterating on
-# ace.py/filament_feed.py/extruder.py/ace-ui without a full firmware
-# rebuild+reflash (see scripts/build_custom_firmware.sh for that).
+# klipper/ and ace-ui/ without a full firmware rebuild+reflash (see
+# scripts/build_custom_firmware.sh for that).
 #
 # Usage:
 #   scripts/deploy_to_printer.sh <printer-ip>
@@ -33,16 +33,16 @@ ssh_run() { sshpass -p "$PASSWORD" ssh "${SSH_OPTS[@]}" "root@$HOST" "$@"; }
 scp_put() { sshpass -p "$PASSWORD" scp "${SSH_OPTS[@]}" "$@"; }
 
 echo ">> Copying Klipper extras/kinematics..."
-scp_put "$SNAPACE_DIR/ace.py" "$SNAPACE_DIR/filament_feed.py" \
+scp_put "$SNAPACE_DIR"/klipper/extras/*.py \
   "root@$HOST:/home/lava/klipper/klippy/extras/"
-scp_put "$SNAPACE_DIR/extruder.py" \
+scp_put "$SNAPACE_DIR"/klipper/kinematics/*.py \
   "root@$HOST:/home/lava/klipper/klippy/kinematics/"
 
 echo ">> Copying ACE status UI..."
 ssh_run "mkdir -p /usr/local/ace-ui/html /usr/local/share/firmware-config/functions /etc/nginx/fluidd.d"
 scp_put "$SNAPACE_DIR/ace-ui/html/"* "root@$HOST:/usr/local/ace-ui/html/"
-scp_put "$SNAPACE_DIR/ace-ui/ace.conf" "root@$HOST:/etc/nginx/fluidd.d/ace.conf"
-scp_put "$SNAPACE_DIR/ace-ui/12_links_ace_status.yaml" \
+scp_put "$SNAPACE_DIR/ace-ui/nginx/ace.conf" "root@$HOST:/etc/nginx/fluidd.d/ace.conf"
+scp_put "$SNAPACE_DIR/ace-ui/firmware-config/12_links_ace_status.yaml" \
   "root@$HOST:/usr/local/share/firmware-config/functions/12_links_ace_status.yaml"
 
 echo ">> Restarting klipper (a plain FIRMWARE_RESTART gcode keeps the old"
