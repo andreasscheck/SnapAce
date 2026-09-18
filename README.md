@@ -85,7 +85,7 @@ Integration of the Anycubic ACE Pro with the Snapmaker U1 printer as external fi
 7.  **Restart:** Restart your printer to apply the changes.
 
 > [!NOTE]
-> The [`v1.5.2-paxx12-21`](https://github.com/paxx12-snapmaker-u1/SnapmakerU1-Extended-Firmware/releases/tag/v1.5.2-paxx12-21) release notes warn that SSH-installed extensions like this one have been reported to cause `Klipper failed to start` or bootloops. Keep a `full-recover.txt` file on a FAT32 USB stick as a recovery path (see the firmware project's docs), or use the baked-in build below to at least rule out file-copy mistakes.
+> The [`v1.6.0-paxx12-22`](https://github.com/paxx12-snapmaker-u1/SnapmakerU1-Extended-Firmware/releases/tag/v1.6.0-paxx12-22) release notes warn that SSH-installed extensions like this one live outside the managed overlay and may not be removed by recovery. Keep a `full-recover.txt` file on a FAT32 USB stick as a recovery path (see the firmware project's docs), or use the baked-in build below to at least rule out file-copy mistakes.
 
 ### Map extruders to ACE gates
 
@@ -109,7 +109,7 @@ builds a full custom firmware `.bin` with these changes included, using the
 project's own overlay/mod build system (Docker required):
 
 ```bash
-scripts/build_custom_firmware.sh v1.5.2-paxx12-21
+scripts/build_custom_firmware.sh v1.6.0-paxx12-22
 ```
 
 This clones the firmware repo (as a sibling directory by default), extracts
