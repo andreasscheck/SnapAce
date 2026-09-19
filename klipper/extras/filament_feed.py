@@ -1352,8 +1352,22 @@ class FilamentFeed:
                             # assist off for the rest of the print, since
                             # nothing re-enables it afterward - restore
                             # whatever the currently active extruder needs
-                            # instead of always turning it off.
-                            self.ace._sync_feed_assist_to_active_extruder()
+                            # instead of always turning it off. But a
+                            # standalone load while idle has no print to
+                            # resume feed assist for, and the active
+                            # extruder is still whatever was last used, so
+                            # syncing there just leaves feed assist stuck on
+                            # - only sync while an actual print is running.
+                            machine_state_manager = self.printer.lookup_object(
+                                'machine_state_manager', None)
+                            is_printing = (
+                                machine_state_manager is not None and
+                                str(machine_state_manager.get_status()
+                                    ['main_state']) == 'PRINTING')
+                            if is_printing:
+                                self.ace._sync_feed_assist_to_active_extruder()
+                            else:
+                                self.ace._disable_feed_assist()
                     finally:
                         self.gcode.run_script_from_command("M107\r\n")
                         self.gcode.run_script_from_command("M104 S0\r\n")
