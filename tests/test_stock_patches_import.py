@@ -16,6 +16,7 @@ patches to someone else's large file - a bad merge, a stray indent, a
 leftover conflict marker, a typo'd reference - without needing a real
 printer. It does not catch logic bugs in the patched behavior itself.
 """
+import ast
 import os
 import sys
 import types
@@ -49,6 +50,29 @@ class StockPatchImportTests(unittest.TestCase):
         module = self._exec(spec)
 
         self.assertTrue(hasattr(module, 'FilamentFeed'))
+
+    def test_extruder_declares_nozzle_volume_type(self):
+        # flow_calibrator.py's FLOW_RESET_K reads extruder.nozzle_volume_type
+        # unconditionally; stock extruder.py sets it. Guard the fork against
+        # dropping it again (regression: multiACE PR #12).
+        for name in ('stepper', 'chelper', 'coded_exception', 'queuefile'):
+            sys.modules.setdefault(name, types.ModuleType(name))
+        path = os.path.join(KLIPPER_DIR, 'kinematics', 'extruder.py')
+        module = self._exec(self._load_spec('snapace_test_extruder_voltype', path))
+
+        self.assertIn('volume_type', module.NOZZLE_CONFIG_DEFAULT)
+
+        with open(path) as f:
+            tree = ast.parse(f.read())
+        init = next(
+            n for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef) and n.name == '__init__'
+            and any(isinstance(a, ast.arg) and a.arg == 'extruder_num'
+                    for a in n.args.args))
+        assigned = {
+            t.attr for n in ast.walk(init) if isinstance(n, ast.Assign)
+            for t in n.targets if isinstance(t, ast.Attribute)}
+        self.assertIn('nozzle_volume_type', assigned)
 
     @staticmethod
     def _load_spec(name, path):

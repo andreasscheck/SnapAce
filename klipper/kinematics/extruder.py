@@ -30,6 +30,7 @@ NOZZLE_CONFIG_POSTFIX = "_nozzle_config.json"
 VALID_NOZZLE_DIAMETERS = [0.2, 0.4, 0.6, 0.8]
 NOZZLE_CONFIG_DEFAULT = {
     "diameter": 0.4,
+    "volume_type": "standard",
 }
 
 class ExtruderSwitchRecorder:
@@ -425,6 +426,7 @@ class PrinterExtruder:
         self.nozzle_config_path = os.path.join(nozzle_config_dir, nozzle_config_name)
         self.nozzle_config_info = self.printer.load_snapmaker_config_file(self.nozzle_config_path, NOZZLE_CONFIG_DEFAULT)
         self.nozzle_diameter = self.nozzle_config_info['diameter']
+        self.nozzle_volume_type = self.nozzle_config_info['volume_type']
 
         # Setup hotend heater
         pheaters = self.printer.load_object(config, 'heaters')
