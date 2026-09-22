@@ -27,6 +27,7 @@ Integration of the Anycubic ACE Pro with the Snapmaker U1 printer as external fi
 - [Tool count cleanup](#tool-count-cleanup-baked-in-build-only)
 - [Repository Structure](#repository-structure)
 - [Development](#development)
+- [Release Notes](#release-notes)
 - [Support](#support)
 
 ## Features
@@ -85,7 +86,7 @@ Integration of the Anycubic ACE Pro with the Snapmaker U1 printer as external fi
 7.  **Restart:** Restart your printer to apply the changes.
 
 > [!NOTE]
-> The [`v1.5.2-paxx12-21`](https://github.com/paxx12-snapmaker-u1/SnapmakerU1-Extended-Firmware/releases/tag/v1.5.2-paxx12-21) release notes warn that SSH-installed extensions like this one have been reported to cause `Klipper failed to start` or bootloops. Keep a `full-recover.txt` file on a FAT32 USB stick as a recovery path (see the firmware project's docs), or use the baked-in build below to at least rule out file-copy mistakes.
+> The [`v1.6.0-paxx12-22`](https://github.com/paxx12-snapmaker-u1/SnapmakerU1-Extended-Firmware/releases/tag/v1.6.0-paxx12-22) release notes warn that SSH-installed extensions like this one live outside the managed overlay and may not be removed by recovery. Keep a `full-recover.txt` file on a FAT32 USB stick as a recovery path (see the firmware project's docs), or use the baked-in build below to at least rule out file-copy mistakes.
 
 ### Map extruders to ACE gates
 
@@ -109,7 +110,7 @@ builds a full custom firmware `.bin` with these changes included, using the
 project's own overlay/mod build system (Docker required):
 
 ```bash
-scripts/build_custom_firmware.sh v1.5.2-paxx12-21
+scripts/build_custom_firmware.sh v1.6.0-paxx12-22
 ```
 
 This clones the firmware repo (as a sibling directory by default), extracts
@@ -250,3 +251,58 @@ CI runs this on every push and pull request (see
 
 For iterating against a real printer instead of guessing, see
 [Faster iteration](#faster-iteration-push-straight-to-a-running-printer) above.
+
+## Release Notes
+
+Each release tracks a [Paxx12 Extended Firmware](https://github.com/paxx12-snapmaker-u1/SnapmakerU1-Extended-Firmware)
+tag (`vX.Y.Z-paxx12-N`) as its stock base — see
+[Alternative: bake SnapAce into a firmware image](#alternative-bake-snapace-into-a-firmware-image)
+for what that means for merging.
+
+### Unreleased ([`feature/v1.6.0-paxx12-22`](https://github.com/andreasscheck/SnapAce/tree/feature/v1.6.0-paxx12-22))
+
+- Bumped the firmware base to `v1.6.0-paxx12-22`: re-merged the ACE
+  customizations onto the new stock `filament_feed.py`/`extruder.py` via
+  3-way merge; `ace.py` needed no changes.
+- Fixed feed assist staying enabled after a standalone (non-print) filament
+  load — the mid-print top-off sync added in v1.5.2 now only fires while a
+  print is actually running, otherwise it disables as before.
+
+### [v1.5.2-paxx12-21](https://github.com/andreasscheck/SnapAce/tree/feature/v1.5.2-paxx12-21) (current `main`)
+
+- Restructured the repo into `klipper/`, `original/`, `ace-ui/` (mirroring
+  the on-printer layout), added a unit test suite with CI, and rewrote this
+  README.
+- Added the [`/ace` status/control web UI](#status-ui-ace): connection
+  status, dryer controls, and per-gate feed/retract jog + feed-assist
+  toggle buttons.
+- Fixed feed assist getting silently disabled for the rest of a print by
+  the `PRINT_AUTO_FEEDING` top-off check, and fixed a `TypeError` crash
+  from the `idle_timeout:printing` hook; feed assist now also activates
+  correctly for prints that start without an extruder switch.
+- Added [scripts/deploy_to_printer.sh](scripts/deploy_to_printer.sh) for
+  pushing changes to a running printer over SSH, and hardened
+  `build_custom_firmware.sh` against a stale-build-cache bug that could
+  silently produce an incomplete firmware image.
+- Added factory-mode support and debounce logic for filament detection, to
+  reduce false-positive runout/insert events.
+- Automated cleanup of the 28 dead `T4`-`T31` tool-change stub macros (see
+  [Tool count cleanup](#tool-count-cleanup-baked-in-build-only)).
+
+### v1.4.1-paxx12-20
+
+- Added ACE support for feeding tool heads via the ACE Pro alongside the
+  printer's internal filament feeder.
+- Added filament-availability checks during preload and unload.
+- Disabled feed assist after a successful filament load (later refined to
+  account for mid-print top-offs, see v1.5.2 and Unreleased above).
+
+### v1.3.0-paxx12-16
+
+- First release tracking the Paxx12 Extended Firmware's own version/tag
+  scheme.
+
+### Pre-versioning
+
+- Initial ACE Pro integration, including RFID tag reading (material,
+  brand, color).

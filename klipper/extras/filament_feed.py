@@ -733,25 +733,35 @@ class FilamentFeed:
     def _get_filament_temp(self, channel):
         print_task_config = self.printer.lookup_object('print_task_config', None)
         filament_parameters = self.printer.lookup_object('filament_parameters', None)
-        if print_task_config is None or filament_parameters is None:
+        extruder_obj = self.printer.lookup_object("extruder", None)
+        if self.filament_ch[channel] != 0:
+            extruder_obj = self.printer.lookup_object(f"extruder{self.filament_ch[channel]}", None)
+        if print_task_config is None or filament_parameters is None or extruder_obj is None:
             return FEED_FILAMENT_TEMP_DEFAULT
 
         status = print_task_config.get_status()
         return filament_parameters.get_load_temp(
                 status['filament_vendor'][self.filament_ch[channel]],
                 status['filament_type'][self.filament_ch[channel]],
-                status['filament_sub_type'][self.filament_ch[channel]])
+                status['filament_sub_type'][self.filament_ch[channel]],
+                extruder_obj.nozzle_diameter,
+                extruder_obj.nozzle_volume_type)
     def _get_filament_soft(self, channel):
         print_task_config = self.printer.lookup_object('print_task_config', None)
         filament_parameters = self.printer.lookup_object('filament_parameters', None)
-        if print_task_config is None or filament_parameters is None:
+        extruder_obj = self.printer.lookup_object("extruder", None)
+        if self.filament_ch[channel] != 0:
+            extruder_obj = self.printer.lookup_object(f"extruder{self.filament_ch[channel]}", None)
+        if print_task_config is None or filament_parameters is None or extruder_obj is None:
             return False
 
         status = print_task_config.get_status()
         return filament_parameters.get_is_soft(
                 status['filament_vendor'][self.filament_ch[channel]],
                 status['filament_type'][self.filament_ch[channel]],
-                status['filament_sub_type'][self.filament_ch[channel]])
+                status['filament_sub_type'][self.filament_ch[channel]],
+                extruder_obj.nozzle_diameter,
+                extruder_obj.nozzle_volume_type)
 
     def _hang_neutral(self, channel):
         self.reactor.pause(self.reactor.monotonic() + 0.105)
@@ -1342,8 +1352,22 @@ class FilamentFeed:
                             # assist off for the rest of the print, since
                             # nothing re-enables it afterward - restore
                             # whatever the currently active extruder needs
-                            # instead of always turning it off.
-                            self.ace._sync_feed_assist_to_active_extruder()
+                            # instead of always turning it off. But a
+                            # standalone load while idle has no print to
+                            # resume feed assist for, and the active
+                            # extruder is still whatever was last used, so
+                            # syncing there just leaves feed assist stuck on
+                            # - only sync while an actual print is running.
+                            machine_state_manager = self.printer.lookup_object(
+                                'machine_state_manager', None)
+                            is_printing = (
+                                machine_state_manager is not None and
+                                str(machine_state_manager.get_status()
+                                    ['main_state']) == 'PRINTING')
+                            if is_printing:
+                                self.ace._sync_feed_assist_to_active_extruder()
+                            else:
+                                self.ace._disable_feed_assist()
                     finally:
                         self.gcode.run_script_from_command("M107\r\n")
                         self.gcode.run_script_from_command("M104 S0\r\n")
@@ -1834,11 +1858,14 @@ class FilamentFeed:
             stage = stage.lower()
         is_printing = gcmd.get_int('PRINTING', 0, minval=0, maxval=1)
         need_save = gcmd.get_int('SAVE', 1, minval=0, maxval=1)
+        restore_temp_from_cmd = gcmd.get_float('RESTORE_TEMP', None)
 
         raw_msg = None
         msg = None
 
         logging.info("[feed] FEED_AUTO %s", gcmd.get_raw_command_parameters())
+        logging.info(f"[feed] current state: {self.get_status()}")
+
         filament_entangle_detect = self.printer.lookup_object(
                 f'filament_entangle_detect e{self.filament_ch[channel]}_filament', None)
         machine_state_manager = self.printer.lookup_object('machine_state_manager', None)
@@ -1909,7 +1936,10 @@ class FilamentFeed:
                     raise
             finally:
                 if need_restore_temp == True:
-                    self.gcode.run_script_from_command(f"M104 S{last_temp} T{self.filament_ch[channel]} A0")
+                    if restore_temp_from_cmd is not None:
+                        self.gcode.run_script_from_command(f"M104 S{restore_temp_from_cmd} T{self.filament_ch[channel]} A0")
+                    else:
+                        self.gcode.run_script_from_command(f"M104 S{last_temp} T{self.filament_ch[channel]} A0")
                 if filament_entangle_detect is not None:
                     filament_entangle_detect.skip_entangle_check(False)
                 if machine_state_manager is not None:
@@ -1978,7 +2008,10 @@ class FilamentFeed:
                             self.gcode.run_script_from_command("SET_MAIN_STATE MAIN_STATE=IDLE ACTION=IDLE")
             finally:
                 if need_restore_temp == True:
-                    self.gcode.run_script_from_command(f"M104 S{last_temp} T{self.filament_ch[channel]} A0")
+                    if restore_temp_from_cmd is not None:
+                        self.gcode.run_script_from_command(f"M104 S{restore_temp_from_cmd} T{self.filament_ch[channel]} A0")
+                    else:
+                        self.gcode.run_script_from_command(f"M104 S{last_temp} T{self.filament_ch[channel]} A0")
                 if filament_entangle_detect is not None:
                     filament_entangle_detect.skip_entangle_check(False)
 

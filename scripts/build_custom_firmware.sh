@@ -21,7 +21,7 @@
 set -euo pipefail
 
 SNAPACE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-FIRMWARE_TAG="${1:-v1.5.2-paxx12-21}"
+FIRMWARE_TAG="${1:-v1.6.0-paxx12-22}"
 FIRMWARE_REPO_URL="https://github.com/paxx12-snapmaker-u1/SnapmakerU1-Extended-Firmware.git"
 FIRMWARE_REPO_DIR="${FIRMWARE_REPO_DIR:-$(cd "$SNAPACE_DIR/.." && pwd)/SnapmakerU1-Extended-Firmware}"
 MOD_NAME="${MOD_NAME:-andreasscheck}"
