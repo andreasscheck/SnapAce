@@ -32,7 +32,7 @@ VALID_NOZZLE_VOLUME_TYPES = ['standard', 'high_flow']
 NOZZLE_CONFIG_DEFAULT = {
     "diameter": 0.4,
     "diameter_v160": 0.4,
-    "volume_type": "standard",
+    "volume_type": "standard"
 }
 
 class ExtruderSwitchRecorder:
