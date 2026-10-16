@@ -108,6 +108,12 @@ FEED_LOAD_POSITION_X                                = 150
 FEED_LOAD_POSITION_Y                                = 5
 FEED_LOAD_LENGTH_MAX                                = 1100.0
 FEED_LOAD_TIMEOUT_TIME                              = 60
+# ACE-fed load: filament is pushed towards the toolhead sensor in chunks.
+# If a chunk finishes without reaching the sensor, keep feeding further
+# chunks up to FEED_ACE_LOAD_EXTRA_LENGTH_MAX before failing the load.
+FEED_ACE_LOAD_CHUNK_LENGTH                          = 100
+FEED_ACE_LOAD_CHUNK_SPEED                           = 20
+FEED_ACE_LOAD_EXTRA_LENGTH_MAX                      = 400
 FEED_LOAD_MOTOR_ERR_CNT_MAX                         = 20
 FEED_LOAD_WHEEL_ERR_CNT_MAX                         = 20
 FEED_LOAD_EXTRUDE_TIMES_MAX                         = 20
@@ -583,6 +589,14 @@ class FilamentFeed:
         if self.ace is None:
             return None
         return self.ace.gate_for_extruder(self.filament_ch[channel])
+
+    def _ace_feed_chunk(self, gate):
+        # Returns the earliest time the ACE "ready" status may be taken as
+        # "this chunk is done".
+        self.ace._feed(gate, FEED_ACE_LOAD_CHUNK_LENGTH,
+                       FEED_ACE_LOAD_CHUNK_SPEED, 0)
+        return (self.reactor.monotonic() +
+                FEED_ACE_LOAD_CHUNK_LENGTH / FEED_ACE_LOAD_CHUNK_SPEED + 0.5)
 
     def _ace_preload_complete(self, extruder):
         self._ace_filament_available(extruder)
@@ -1093,7 +1107,8 @@ class FilamentFeed:
                         one_step_cnt = self.wheel[ch].ppr * 2.0 * 10.0 / FEED_WHEEL_CIRCUMFERENCE
                         if use_ace:
                             self.ace.prepare_gate_for_load(ace_gate)
-                            self.ace._feed(ace_gate, 100, 20, 0)
+                            ace_extra_length = 0
+                            ace_chunk_deadline = self._ace_feed_chunk(ace_gate)
 
                         while 1:
                             if not use_ace:
@@ -1121,13 +1136,30 @@ class FilamentFeed:
                                     self.ace._stop_feeding(ace_gate)
                                 self.channel_error[ch] = FEED_OK
                                 break
-                            if use_ace and (
-                                    self.ace.is_ace_ready() or
-                                    self.reactor.monotonic() - systime_0 >
-                                    FEED_LOAD_TIMEOUT_TIME):
-                                self.channel_error[ch] = FEED_ERR_TIMEOUT
-                                self.exception_code[ch] = 34
-                                break
+                            if use_ace:
+                                if (self.reactor.monotonic() - systime_0 >
+                                        FEED_LOAD_TIMEOUT_TIME):
+                                    self.channel_error[ch] = FEED_ERR_TIMEOUT
+                                    self.exception_code[ch] = 34
+                                    break
+                                # A status reply requested before the chunk
+                                # started can still say "ready", so only
+                                # trust it once the chunk had time to run.
+                                if (self.reactor.monotonic() >= ace_chunk_deadline
+                                        and self.ace.is_ace_ready()):
+                                    if (ace_extra_length + FEED_ACE_LOAD_CHUNK_LENGTH >
+                                            FEED_ACE_LOAD_EXTRA_LENGTH_MAX):
+                                        self.channel_error[ch] = FEED_ERR_TIMEOUT
+                                        self.exception_code[ch] = 34
+                                        break
+                                    ace_extra_length += FEED_ACE_LOAD_CHUNK_LENGTH
+                                    logging.info(
+                                        "[feed_loading] ACE gate %d: filament not at "
+                                        "sensor yet, feeding another %dmm (extra %d/%dmm)",
+                                        ace_gate, FEED_ACE_LOAD_CHUNK_LENGTH,
+                                        ace_extra_length, FEED_ACE_LOAD_EXTRA_LENGTH_MAX)
+                                    ace_chunk_deadline = self._ace_feed_chunk(ace_gate)
+                                    continue
                             if port_detect == False:
                                 self.channel_error[ch] = FEED_ERR_NO_FILAMENT
                                 self.exception_code[ch] = 33

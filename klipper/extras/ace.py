@@ -846,6 +846,19 @@ class BunnyAce:
                     self._feed_assist_index != self._desired_feed_assist_index):
                 self._schedule_feed_assist_reconcile()
 
+    def _mark_feed_assist_interrupted(self, index):
+        # Feeding, unwinding or stopping a gate ends the ACE's feed assist
+        # on that gate, but _feed_assist_index would still claim it is on -
+        # so a later _enable_feed_assist() for the same gate was a no-op
+        # and assist silently stayed off (e.g. after an ACE-fed load). Drop
+        # the cached state and let the reconcile job restart assist once
+        # the ACE is ready again, if that gate should still have it.
+        if self._feed_assist_index != index:
+            return
+        self._feed_assist_index = -1
+        if self._desired_feed_assist_index == index:
+            self._schedule_feed_assist_reconcile()
+
     def _validate_index(self, index):
         if index < 0 or index >= 4:
             raise AceException(f'Wrong ACE gate index: {index}')
@@ -909,6 +922,7 @@ class BunnyAce:
             _wait=True, _job_name=f'feed gate {index}')
 
     def _feed_impl(self, index, length, speed, how_wait=None):
+        self._mark_feed_assist_interrupted(index)
         self._request_and_wait({
             "method": "feed_filament",
             "params": {"index": index, "length": length, "speed": speed},
@@ -949,6 +963,7 @@ class BunnyAce:
             _wait=True, _job_name=f'retract gate {index}')
 
     def _retract_impl(self, index, length, speed):
+        self._mark_feed_assist_interrupted(index)
         self._request_and_wait({
             "method": "unwind_filament",
             "params": {"index": index, "length": length, "speed": speed},
@@ -1001,6 +1016,7 @@ class BunnyAce:
             _job_name=f'stop feeding gate {index}')
 
     def _stop_feeding_impl(self, index):
+        self._mark_feed_assist_interrupted(index)
         self._request_and_wait({
             "method": "stop_feed_filament", "params": {"index": index},
         })

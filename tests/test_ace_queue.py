@@ -205,6 +205,48 @@ class AceQueueTests(unittest.TestCase):
 
         self.assertEqual([('disable', 0), ('enable', 2)], calls)
 
+    def test_feed_on_assisted_gate_restores_feed_assist_afterwards(self):
+        ace = make_ace()
+        ace._feed_assist_index = 2
+        ace._desired_feed_assist_index = 2
+        calls = []
+
+        def request(req, timeout=None):
+            calls.append((req['method'], req['params']['index']))
+
+        def enable(index):
+            calls.append(('enable', index))
+            ace._feed_assist_index = index
+
+        ace._request_and_wait = request
+        ace._enable_feed_assist_impl = enable
+        ace.dwell = lambda delay=1.0: None
+
+        ace._enqueue_ace_job(ace._feed_impl, 2, 100, 20, 0)
+        ace.reactor.run_all()
+
+        self.assertEqual(
+            [('feed_filament', 2), ('enable', 2)], calls)
+        self.assertEqual(2, ace._feed_assist_index)
+
+    def test_feed_on_other_gate_keeps_feed_assist_state(self):
+        ace = make_ace()
+        ace._feed_assist_index = 2
+        ace._desired_feed_assist_index = 2
+        calls = []
+
+        ace._request_and_wait = lambda req, timeout=None: calls.append(
+            (req['method'], req['params']['index']))
+        ace._enable_feed_assist_impl = lambda index: calls.append(
+            ('enable', index))
+        ace.dwell = lambda delay=1.0: None
+
+        ace._enqueue_ace_job(ace._feed_impl, 1, 100, 20, 0)
+        ace.reactor.run_all()
+
+        self.assertEqual([('feed_filament', 1)], calls)
+        self.assertEqual(2, ace._feed_assist_index)
+
     def test_disable_is_idempotent_when_no_gate_is_active(self):
         ace = make_ace()
         calls = []
