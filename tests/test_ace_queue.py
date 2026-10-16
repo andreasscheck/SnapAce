@@ -276,17 +276,32 @@ class AceQueueTests(unittest.TestCase):
         self.assertEqual(-1, ace._desired_feed_assist_index)
         self.assertEqual(-1, ace._feed_assist_index)
 
-    def test_handle_printing_accepts_klipper_event_argument(self):
-        # idle_timeout:printing is fired by Klipper with a print_time
-        # argument (see extras/idle_timeout.py's handle_sync_print_time) -
-        # a handler that only accepts `self` raises a TypeError that takes
-        # klippy down mid-print (regression: 2026-09-10).
+    def test_print_start_syncs_feed_assist_to_active_extruder(self):
         ace = make_ace()
-        ace.extruder_gate_map = [None, None, None, None]
+        ace.extruder_gate_map = [2, None, 0, None]
         ace.toolhead = types.SimpleNamespace(
             get_extruder=lambda: types.SimpleNamespace(extruder_num=0))
+        calls = []
+        ace._enable_feed_assist_impl = lambda index: (
+            calls.append(('enable', index)),
+            setattr(ace, '_feed_assist_index', index))
 
-        ace._handle_printing(123.456)  # must not raise
+        ace._handle_print_start()
+        ace.reactor.run_all()
+
+        self.assertEqual([('enable', 2)], calls)
+
+    def test_is_printing_follows_print_stats_state(self):
+        ace = make_ace()
+        print_stats = types.SimpleNamespace(state='standby')
+        ace.printer.lookup_object = lambda name, default=None: (
+            print_stats if name == 'print_stats' else default)
+
+        self.assertFalse(ace.is_printing())
+        print_stats.state = 'printing'
+        self.assertTrue(ace.is_printing())
+        print_stats.state = 'paused'
+        self.assertFalse(ace.is_printing())
 
     def test_sync_feed_assist_enables_for_mapped_active_extruder(self):
         ace = make_ace()

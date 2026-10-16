@@ -1805,7 +1805,11 @@ class PrinterExtruder:
                 self.printer.send_event("extruder:activate_extruder")
                 ace_gate = (None if ace is None else
                             ace.gate_for_extruder(self.extruder_num))
-                if ace_gate is not None:
+                # Only while printing: a manual tool change in standby would
+                # otherwise leave feed assist running with nothing to print.
+                # ACE-fed loads enable assist themselves once the filament
+                # is fed, and print_stats:start syncs it on print start/resume.
+                if ace_gate is not None and ace.is_printing():
                     ace._enable_feed_assist(ace_gate)
                     gcmd.respond_info("ACE enable feed_assist for extruder %s" % (self.name,))
 

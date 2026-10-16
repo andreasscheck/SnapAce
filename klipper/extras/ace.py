@@ -144,7 +144,7 @@ class BunnyAce:
         self.printer.register_event_handler(
             'print_stats:stop', self._handle_print_stop)
         self.printer.register_event_handler(
-            'idle_timeout:printing', self._handle_printing)
+            'print_stats:start', self._handle_print_start)
 
         self.gcode.register_command(
             'ACE_SYNC_FEED_ASSIST', self.cmd_ACE_SYNC_FEED_ASSIST,
@@ -221,9 +221,12 @@ class BunnyAce:
         self.log_always('ACE: print_stats:stop received, disabling feed assist')
         self._disable_feed_assist()
 
-    def _handle_printing(self, *args):
-        # idle_timeout:printing is fired with a print_time argument -
-        # accept and ignore any args since only the event itself matters.
+    def _handle_print_start(self, *args):
+        # Fired by print_stats when a print starts or resumes. Do not use
+        # idle_timeout:printing here: that fires on any toolhead activity
+        # (homing, jogging, end-of-print moves, startup macros), which
+        # re-enabled feed assist in standby right after print_stats:stop
+        # had turned it off.
         self._sync_feed_assist_to_active_extruder()
 
     def _sync_feed_assist_to_active_extruder(self):
@@ -583,6 +586,10 @@ class BunnyAce:
                 f"ACE {request.get('method')} failed: {response.get('msg')}")
         return response
 
+    def is_printing(self):
+        print_stats = self.printer.lookup_object('print_stats', None)
+        return getattr(print_stats, 'state', None) == 'printing'
+
     def is_ace_ready(self):
         return self._info['status'] == 'ready'
 
@@ -875,6 +882,7 @@ class BunnyAce:
         })
         self._feed_assist_index = index
         self.dwell(delay=0.7)
+        self.gcode.respond_info(f'Enabled ACE feed assist for gate {index}')
 
     cmd_ACE_ENABLE_FEED_ASSIST_help = 'Enables ACE feed assist'
 
