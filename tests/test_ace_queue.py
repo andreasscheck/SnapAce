@@ -366,6 +366,34 @@ class AceQueueTests(unittest.TestCase):
         with self.assertRaises(AceException):
             ace.wait_ace_ready()
 
+    def test_filament_detect_skips_rfid_requests_for_ace_fed_extruders(self):
+        ace = make_ace()
+        ace.extruder_gate_map = [2, None, 0, None]
+        calls = []
+
+        class FakeFilamentDetect:
+            def request_update_filament_info(self, channel):
+                calls.append(('update', channel))
+
+            def request_clear_filament_info(self, channel):
+                calls.append(('clear', channel))
+
+            def runout(self, channel):
+                # Stock filament_detect calls through self, so the guard
+                # must apply to its internal event handlers too.
+                self.request_clear_filament_info(channel)
+                self.request_update_filament_info(channel)
+
+        filament_detect = FakeFilamentDetect()
+        ace._guard_filament_detect(filament_detect)
+
+        for channel in range(4):
+            filament_detect.runout(channel)
+
+        self.assertEqual(
+            [('clear', 1), ('update', 1), ('clear', 3), ('update', 3)],
+            calls)
+
 
 if __name__ == '__main__':
     unittest.main()

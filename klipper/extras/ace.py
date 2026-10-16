@@ -138,6 +138,7 @@ class BunnyAce:
         }
         self.extruder_sensor = None
 
+        self.printer.register_event_handler('klippy:connect', self._handle_connect)
         self.printer.register_event_handler('klippy:ready', self._handle_ready)
         self.printer.register_event_handler('klippy:disconnect', self._handle_disconnect)
         self.printer.register_event_handler(
@@ -169,6 +170,35 @@ class BunnyAce:
         self.gcode.register_command(
             'ACE_CHECK_JSON_STATUS', self.cmd_ACE_CHECK_JSON_STATUS,
             desc=self.cmd_ACE_CHECK_JSON_STATUS_help)
+
+    def _handle_connect(self):
+        # Runs before klippy:ready so filament_detect's own startup read
+        # already goes through the guard below.
+        filament_detect = self.printer.lookup_object('filament_detect', None)
+        if filament_detect is not None:
+            self._guard_filament_detect(filament_detect)
+
+    def _guard_filament_detect(self, filament_detect):
+        # Stock filament_detect reads/clears the U1's built-in RFID reader
+        # whenever the toolhead runout sensor or feeder port reports a
+        # change - e.g. after an ACE retract. ACE spools never sit in that
+        # reader, so a "clear" (or a failed read) overwrites the filament
+        # type and color configured for the extruder with NONE/white.
+        # Skip those requests for extruders fed by the ACE.
+        def guard(request):
+            def guarded(channel):
+                if self.manages_extruder(channel):
+                    logging.info(
+                        f'ACE: skipping {request.__name__} for ACE-fed '
+                        f'extruder {channel}')
+                    return
+                request(channel)
+            return guarded
+
+        filament_detect.request_update_filament_info = guard(
+            filament_detect.request_update_filament_info)
+        filament_detect.request_clear_filament_info = guard(
+            filament_detect.request_clear_filament_info)
 
     def _handle_ready(self):
         self.toolhead = self.printer.lookup_object('toolhead')
