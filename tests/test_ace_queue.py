@@ -330,6 +330,40 @@ class AceQueueTests(unittest.TestCase):
         self.assertEqual([('enable', 2)], calls)
         self.assertEqual(2, ace._feed_assist_index)
 
+    def test_sync_feed_assist_skips_parked_active_extruder(self):
+        ace = make_ace()
+        ace.extruder_gate_map = [2, 3, None, None]
+        ace.toolhead = types.SimpleNamespace(
+            get_extruder=lambda: types.SimpleNamespace(
+                extruder_num=0,
+                get_park_detector_status=lambda: {'state': 'PARKED'}))
+        calls = []
+        ace._enable_feed_assist_impl = lambda index: calls.append(
+            ('enable', index))
+
+        ace._sync_feed_assist_to_active_extruder()
+        ace.reactor.run_all()
+
+        self.assertEqual([], calls)
+        self.assertEqual(-1, ace._desired_feed_assist_index)
+
+    def test_sync_feed_assist_enables_for_activated_extruder(self):
+        ace = make_ace()
+        ace.extruder_gate_map = [2, 3, None, None]
+        ace.toolhead = types.SimpleNamespace(
+            get_extruder=lambda: types.SimpleNamespace(
+                extruder_num=1,
+                get_park_detector_status=lambda: {'state': 'ACTIVATE'}))
+        calls = []
+        ace._enable_feed_assist_impl = lambda index: (
+            calls.append(('enable', index)),
+            setattr(ace, '_feed_assist_index', index))
+
+        ace._sync_feed_assist_to_active_extruder()
+        ace.reactor.run_all()
+
+        self.assertEqual([('enable', 3)], calls)
+
     def test_sync_feed_assist_disables_for_unmapped_active_extruder(self):
         ace = make_ace()
         ace.extruder_gate_map = [2, None, 0, None]

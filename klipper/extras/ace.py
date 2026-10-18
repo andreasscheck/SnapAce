@@ -249,9 +249,19 @@ class BunnyAce:
                 f'toolhead extruder ({getattr(active_extruder, "name", active_extruder)!r})')
             return
         gate = self.gate_for_extruder(extruder_num)
+        # At print start every toolhead can still be parked while the
+        # toolhead nominally points at the last used one; the print's first
+        # tool change enables the right gate anyway, so don't spin up assist
+        # for a parked extruder only to switch it off a few seconds later.
+        get_park_status = getattr(
+            active_extruder, 'get_park_detector_status', None)
+        park_status = get_park_status() if callable(get_park_status) else None
+        parked = (park_status is not None and
+                  park_status.get('state') == 'PARKED')
         self.log_always(
-            f'ACE: sync_feed_assist extruder={extruder_num} -> gate={gate}')
-        if gate is not None:
+            f'ACE: sync_feed_assist extruder={extruder_num} -> gate={gate}'
+            f'{" (parked)" if parked else ""}')
+        if gate is not None and not parked:
             self._enable_feed_assist(gate)
         else:
             self._disable_feed_assist()
