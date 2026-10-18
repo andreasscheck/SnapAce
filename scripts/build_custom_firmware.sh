@@ -32,7 +32,9 @@ echo ">> [1/4] checkout firmware: $FIRMWARE_REPO_URL @ $FIRMWARE_TAG"
 if [[ ! -d "$FIRMWARE_REPO_DIR/.git" ]]; then
   git clone "$FIRMWARE_REPO_URL" "$FIRMWARE_REPO_DIR"
 fi
-git -C "$FIRMWARE_REPO_DIR" fetch --tags --quiet
+# --force: paxx12's `rolling` tag is moved on every develop build, and a
+# plain fetch refuses to update an existing tag (and fails under set -e).
+git -C "$FIRMWARE_REPO_DIR" fetch --tags --force --quiet
 git -C "$FIRMWARE_REPO_DIR" checkout --quiet "$FIRMWARE_TAG"
 git -C "$FIRMWARE_REPO_DIR" submodule update --init --recursive
 
