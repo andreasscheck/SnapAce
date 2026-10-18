@@ -138,12 +138,13 @@ class BunnyAce:
         }
         self.extruder_sensor = None
 
+        self.printer.register_event_handler('klippy:connect', self._handle_connect)
         self.printer.register_event_handler('klippy:ready', self._handle_ready)
         self.printer.register_event_handler('klippy:disconnect', self._handle_disconnect)
         self.printer.register_event_handler(
             'print_stats:stop', self._handle_print_stop)
         self.printer.register_event_handler(
-            'idle_timeout:printing', self._handle_printing)
+            'print_stats:start', self._handle_print_start)
 
         self.gcode.register_command(
             'ACE_SYNC_FEED_ASSIST', self.cmd_ACE_SYNC_FEED_ASSIST,
@@ -170,6 +171,35 @@ class BunnyAce:
             'ACE_CHECK_JSON_STATUS', self.cmd_ACE_CHECK_JSON_STATUS,
             desc=self.cmd_ACE_CHECK_JSON_STATUS_help)
 
+    def _handle_connect(self):
+        # Runs before klippy:ready so filament_detect's own startup read
+        # already goes through the guard below.
+        filament_detect = self.printer.lookup_object('filament_detect', None)
+        if filament_detect is not None:
+            self._guard_filament_detect(filament_detect)
+
+    def _guard_filament_detect(self, filament_detect):
+        # Stock filament_detect reads/clears the U1's built-in RFID reader
+        # whenever the toolhead runout sensor or feeder port reports a
+        # change - e.g. after an ACE retract. ACE spools never sit in that
+        # reader, so a "clear" (or a failed read) overwrites the filament
+        # type and color configured for the extruder with NONE/white.
+        # Skip those requests for extruders fed by the ACE.
+        def guard(request):
+            def guarded(channel):
+                if self.manages_extruder(channel):
+                    logging.info(
+                        f'ACE: skipping {request.__name__} for ACE-fed '
+                        f'extruder {channel}')
+                    return
+                request(channel)
+            return guarded
+
+        filament_detect.request_update_filament_info = guard(
+            filament_detect.request_update_filament_info)
+        filament_detect.request_clear_filament_info = guard(
+            filament_detect.request_clear_filament_info)
+
     def _handle_ready(self):
         self.toolhead = self.printer.lookup_object('toolhead')
 
@@ -191,9 +221,12 @@ class BunnyAce:
         self.log_always('ACE: print_stats:stop received, disabling feed assist')
         self._disable_feed_assist()
 
-    def _handle_printing(self, *args):
-        # idle_timeout:printing is fired with a print_time argument -
-        # accept and ignore any args since only the event itself matters.
+    def _handle_print_start(self, *args):
+        # Fired by print_stats when a print starts or resumes. Do not use
+        # idle_timeout:printing here: that fires on any toolhead activity
+        # (homing, jogging, end-of-print moves, startup macros), which
+        # re-enabled feed assist in standby right after print_stats:stop
+        # had turned it off.
         self._sync_feed_assist_to_active_extruder()
 
     def _sync_feed_assist_to_active_extruder(self):
@@ -553,6 +586,10 @@ class BunnyAce:
                 f"ACE {request.get('method')} failed: {response.get('msg')}")
         return response
 
+    def is_printing(self):
+        print_stats = self.printer.lookup_object('print_stats', None)
+        return getattr(print_stats, 'state', None) == 'printing'
+
     def is_ace_ready(self):
         return self._info['status'] == 'ready'
 
@@ -816,6 +853,19 @@ class BunnyAce:
                     self._feed_assist_index != self._desired_feed_assist_index):
                 self._schedule_feed_assist_reconcile()
 
+    def _mark_feed_assist_interrupted(self, index):
+        # Feeding, unwinding or stopping a gate ends the ACE's feed assist
+        # on that gate, but _feed_assist_index would still claim it is on -
+        # so a later _enable_feed_assist() for the same gate was a no-op
+        # and assist silently stayed off (e.g. after an ACE-fed load). Drop
+        # the cached state and let the reconcile job restart assist once
+        # the ACE is ready again, if that gate should still have it.
+        if self._feed_assist_index != index:
+            return
+        self._feed_assist_index = -1
+        if self._desired_feed_assist_index == index:
+            self._schedule_feed_assist_reconcile()
+
     def _validate_index(self, index):
         if index < 0 or index >= 4:
             raise AceException(f'Wrong ACE gate index: {index}')
@@ -832,6 +882,7 @@ class BunnyAce:
         })
         self._feed_assist_index = index
         self.dwell(delay=0.7)
+        self.gcode.respond_info(f'Enabled ACE feed assist for gate {index}')
 
     cmd_ACE_ENABLE_FEED_ASSIST_help = 'Enables ACE feed assist'
 
@@ -879,6 +930,7 @@ class BunnyAce:
             _wait=True, _job_name=f'feed gate {index}')
 
     def _feed_impl(self, index, length, speed, how_wait=None):
+        self._mark_feed_assist_interrupted(index)
         self._request_and_wait({
             "method": "feed_filament",
             "params": {"index": index, "length": length, "speed": speed},
@@ -919,6 +971,7 @@ class BunnyAce:
             _wait=True, _job_name=f'retract gate {index}')
 
     def _retract_impl(self, index, length, speed):
+        self._mark_feed_assist_interrupted(index)
         self._request_and_wait({
             "method": "unwind_filament",
             "params": {"index": index, "length": length, "speed": speed},
@@ -971,6 +1024,7 @@ class BunnyAce:
             _job_name=f'stop feeding gate {index}')
 
     def _stop_feeding_impl(self, index):
+        self._mark_feed_assist_interrupted(index)
         self._request_and_wait({
             "method": "stop_feed_filament", "params": {"index": index},
         })

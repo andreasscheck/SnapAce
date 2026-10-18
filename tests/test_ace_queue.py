@@ -205,6 +205,48 @@ class AceQueueTests(unittest.TestCase):
 
         self.assertEqual([('disable', 0), ('enable', 2)], calls)
 
+    def test_feed_on_assisted_gate_restores_feed_assist_afterwards(self):
+        ace = make_ace()
+        ace._feed_assist_index = 2
+        ace._desired_feed_assist_index = 2
+        calls = []
+
+        def request(req, timeout=None):
+            calls.append((req['method'], req['params']['index']))
+
+        def enable(index):
+            calls.append(('enable', index))
+            ace._feed_assist_index = index
+
+        ace._request_and_wait = request
+        ace._enable_feed_assist_impl = enable
+        ace.dwell = lambda delay=1.0: None
+
+        ace._enqueue_ace_job(ace._feed_impl, 2, 100, 20, 0)
+        ace.reactor.run_all()
+
+        self.assertEqual(
+            [('feed_filament', 2), ('enable', 2)], calls)
+        self.assertEqual(2, ace._feed_assist_index)
+
+    def test_feed_on_other_gate_keeps_feed_assist_state(self):
+        ace = make_ace()
+        ace._feed_assist_index = 2
+        ace._desired_feed_assist_index = 2
+        calls = []
+
+        ace._request_and_wait = lambda req, timeout=None: calls.append(
+            (req['method'], req['params']['index']))
+        ace._enable_feed_assist_impl = lambda index: calls.append(
+            ('enable', index))
+        ace.dwell = lambda delay=1.0: None
+
+        ace._enqueue_ace_job(ace._feed_impl, 1, 100, 20, 0)
+        ace.reactor.run_all()
+
+        self.assertEqual([('feed_filament', 1)], calls)
+        self.assertEqual(2, ace._feed_assist_index)
+
     def test_disable_is_idempotent_when_no_gate_is_active(self):
         ace = make_ace()
         calls = []
@@ -234,17 +276,32 @@ class AceQueueTests(unittest.TestCase):
         self.assertEqual(-1, ace._desired_feed_assist_index)
         self.assertEqual(-1, ace._feed_assist_index)
 
-    def test_handle_printing_accepts_klipper_event_argument(self):
-        # idle_timeout:printing is fired by Klipper with a print_time
-        # argument (see extras/idle_timeout.py's handle_sync_print_time) -
-        # a handler that only accepts `self` raises a TypeError that takes
-        # klippy down mid-print (regression: 2026-09-10).
+    def test_print_start_syncs_feed_assist_to_active_extruder(self):
         ace = make_ace()
-        ace.extruder_gate_map = [None, None, None, None]
+        ace.extruder_gate_map = [2, None, 0, None]
         ace.toolhead = types.SimpleNamespace(
             get_extruder=lambda: types.SimpleNamespace(extruder_num=0))
+        calls = []
+        ace._enable_feed_assist_impl = lambda index: (
+            calls.append(('enable', index)),
+            setattr(ace, '_feed_assist_index', index))
 
-        ace._handle_printing(123.456)  # must not raise
+        ace._handle_print_start()
+        ace.reactor.run_all()
+
+        self.assertEqual([('enable', 2)], calls)
+
+    def test_is_printing_follows_print_stats_state(self):
+        ace = make_ace()
+        print_stats = types.SimpleNamespace(state='standby')
+        ace.printer.lookup_object = lambda name, default=None: (
+            print_stats if name == 'print_stats' else default)
+
+        self.assertFalse(ace.is_printing())
+        print_stats.state = 'printing'
+        self.assertTrue(ace.is_printing())
+        print_stats.state = 'paused'
+        self.assertFalse(ace.is_printing())
 
     def test_sync_feed_assist_enables_for_mapped_active_extruder(self):
         ace = make_ace()
@@ -365,6 +422,34 @@ class AceQueueTests(unittest.TestCase):
 
         with self.assertRaises(AceException):
             ace.wait_ace_ready()
+
+    def test_filament_detect_skips_rfid_requests_for_ace_fed_extruders(self):
+        ace = make_ace()
+        ace.extruder_gate_map = [2, None, 0, None]
+        calls = []
+
+        class FakeFilamentDetect:
+            def request_update_filament_info(self, channel):
+                calls.append(('update', channel))
+
+            def request_clear_filament_info(self, channel):
+                calls.append(('clear', channel))
+
+            def runout(self, channel):
+                # Stock filament_detect calls through self, so the guard
+                # must apply to its internal event handlers too.
+                self.request_clear_filament_info(channel)
+                self.request_update_filament_info(channel)
+
+        filament_detect = FakeFilamentDetect()
+        ace._guard_filament_detect(filament_detect)
+
+        for channel in range(4):
+            filament_detect.runout(channel)
+
+        self.assertEqual(
+            [('clear', 1), ('update', 1), ('clear', 3), ('update', 3)],
+            calls)
 
 
 if __name__ == '__main__':
