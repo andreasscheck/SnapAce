@@ -17,6 +17,7 @@
 #   FIRMWARE_REPO_DIR   where to clone/reuse the firmware repo
 #                        (default: ../SnapmakerU1-Extended-Firmware, sibling of this repo)
 #   MOD_NAME             mod overlay name under overlays/mods/ (default: andreasscheck)
+#   BUILD_VOLUME         Docker volume the rootfs is built in (default: snapace-u1-build)
 
 set -euo pipefail
 
@@ -140,8 +141,16 @@ rm -f "$FIRMWARE_REPO_DIR/$OUTPUT_FILE"
 # the printer refuses to accept. Clearing it before each build costs
 # nothing (it's rebuilt from this run) and avoids the failure outright.
 rm -rf "$FIRMWARE_REPO_DIR/tmp/cache-chroot"
-( cd "$FIRMWARE_REPO_DIR" && DOCKER_OPTS="--privileged" \
-    ./dev.sh sudo make build "PROFILE=extended-$MOD_NAME" "OUTPUT_FILE=$OUTPUT_FILE" )
+# Build the rootfs in a Docker volume rather than under the bind-mounted
+# repo: Docker Desktop's macOS file sharing drops chown, so unsquashfs
+# into tmp/firmware fails create_firmware.sh's ownership check
+# ("hwver.sh should be 1000:1000, got 0:0"). The finished image is still
+# written to the repo's firmware/ directory.
+BUILD_VOLUME="${BUILD_VOLUME:-snapace-u1-build}"
+( cd "$FIRMWARE_REPO_DIR" && \
+    DOCKER_OPTS="--privileged -v $BUILD_VOLUME:/build" \
+    ./dev.sh sudo make build "PROFILE=extended-$MOD_NAME" \
+      "OUTPUT_FILE=$OUTPUT_FILE" "BUILD_DIR=/build/firmware" )
 
 echo ">> Done: $FIRMWARE_REPO_DIR/$OUTPUT_FILE"
 
