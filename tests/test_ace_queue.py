@@ -291,6 +291,17 @@ class AceQueueTests(unittest.TestCase):
 
         self.assertEqual([('enable', 2)], calls)
 
+    def test_keeps_feed_assist_only_for_extruder_on_requested_gate(self):
+        ace = make_ace()
+        ace.extruder_gate_map = [2, 3, 1, None]
+        ace._desired_feed_assist_index = 3
+
+        self.assertTrue(ace.keeps_feed_assist_for(1))
+        self.assertFalse(ace.keeps_feed_assist_for(0))
+        self.assertFalse(ace.keeps_feed_assist_for(3))
+        ace._desired_feed_assist_index = -1
+        self.assertFalse(ace.keeps_feed_assist_for(1))
+
     def test_is_printing_follows_print_stats_state(self):
         ace = make_ace()
         print_stats = types.SimpleNamespace(state='standby')

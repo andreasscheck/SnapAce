@@ -629,6 +629,13 @@ class BunnyAce:
                 'each ACE gate may only be assigned to one extruder')
         return mapping
 
+    def keeps_feed_assist_for(self, extruder_num):
+        # True when switching to this extruder would only re-enable the
+        # gate that already has feed assist requested (e.g. the same
+        # extruder being re-picked), so the switch can leave it running.
+        gate = self.gate_for_extruder(extruder_num)
+        return gate is not None and gate == self._desired_feed_assist_index
+
     def manages_extruder(self, index):
         return self.gate_for_extruder(index) is not None
 

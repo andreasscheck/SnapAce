@@ -1628,10 +1628,17 @@ class PrinterExtruder:
                     #     raise gcmd.error("Abnormal state detection after extruder park, {}: {}".format(cur_extruder.name, cur_extruder_state))
 
             if ace is not None:
-                ace._disable_feed_assist(self.extruder_num)
-                gcmd.respond_info(
-                    "ACE disable feed_assist for extruder %s (action=%s, forced_park=%s)"
-                    % (self.name, action, forced_park))
+                if action != 'PARK' and ace.keeps_feed_assist_for(self.extruder_num):
+                    # e.g. re-picking the same extruder after probing - an
+                    # off/on cycle would only cost time and a retract.
+                    gcmd.respond_info(
+                        "ACE keep feed_assist for extruder %s (gate unchanged)"
+                        % (self.name,))
+                else:
+                    ace._disable_feed_assist(self.extruder_num)
+                    gcmd.respond_info(
+                        "ACE disable feed_assist for extruder %s (action=%s, forced_park=%s)"
+                        % (self.name, action, forced_park))
             if action == 'PARK':
                 raise ExtruderParkAction("park action success!!!")
 
