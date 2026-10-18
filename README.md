@@ -110,8 +110,13 @@ builds a full custom firmware `.bin` with these changes included, using the
 project's own overlay/mod build system (Docker required):
 
 ```bash
-scripts/build_custom_firmware.sh v1.6.0-paxx12-22
+scripts/build_custom_firmware.sh 1c075c4
 ```
+
+The argument is a firmware repo tag or commit. v2.0.0 is only available as
+paxx12's rolling `develop` build so far, so the default is the `develop`
+commit that build was made from (`1c075c4`); pass `v1.6.0-paxx12-22` for
+the last stable base.
 
 This clones the firmware repo (as a sibling directory by default), extracts
 the matching stock firmware, 3-way merges this repo's
@@ -259,7 +264,16 @@ tag (`vX.Y.Z-paxx12-N`) as its stock base — see
 [Alternative: bake SnapAce into a firmware image](#alternative-bake-snapace-into-a-firmware-image)
 for what that means for merging.
 
-### Unreleased ([`feature/v1.6.0-paxx12-22`](https://github.com/andreasscheck/SnapAce/tree/feature/v1.6.0-paxx12-22))
+### Unreleased ([`feature/v2.0.0-paxx12-develop`](https://github.com/andreasscheck/SnapAce/tree/feature/v2.0.0-paxx12-develop))
+
+- Bumped the firmware base to paxx12's rolling v2.0.0 `develop` build
+  (`1c075c4`, stock Snapmaker firmware 2.0.0.205). Stock
+  `filament_feed.py`/`extruder.py` are unchanged from 1.6.0, so `original/`
+  and the ACE customizations needed no merge; the new paxx12
+  `39-feature-filament-feeders` patch to `filament_feed.py` applies cleanly
+  alongside SnapAce's.
+
+### [v1.6.0-paxx12-22](https://github.com/andreasscheck/SnapAce/tree/feature/v1.6.0-paxx12-22) (current `main`)
 
 - Bumped the firmware base to `v1.6.0-paxx12-22`: re-merged the ACE
   customizations onto the new stock `filament_feed.py`/`extruder.py` via
@@ -267,8 +281,18 @@ for what that means for merging.
 - Fixed feed assist staying enabled after a standalone (non-print) filament
   load — the mid-print top-off sync added in v1.5.2 now only fires while a
   print is actually running, otherwise it disables as before.
+- Fixed `FLOW_RESET_K` crashing Klipper on every boot (missing
+  `nozzle_volume_type` on the swapped-in `extruder.py`).
+- Fixed the filament type/color configured for ACE-fed extruders being
+  reset to NONE/white after an unload, a runout or a restart.
+- Fixed feed assist silently staying off after an ACE-fed load, and ACE-fed
+  loads failing when one 100mm feed fell short of the toolhead sensor (it
+  now keeps feeding up to 400mm extra).
+- Feed assist now only runs while printing: it no longer turns back on in
+  standby after a print, on Klipper start or on a manual tool change, and a
+  tool change that keeps the same gate no longer cycles it off and on.
 
-### [v1.5.2-paxx12-21](https://github.com/andreasscheck/SnapAce/tree/feature/v1.5.2-paxx12-21) (current `main`)
+### [v1.5.2-paxx12-21](https://github.com/andreasscheck/SnapAce/tree/feature/v1.5.2-paxx12-21)
 
 - Restructured the repo into `klipper/`, `original/`, `ace-ui/` (mirroring
   the on-printer layout), added a unit test suite with CI, and rewrote this
