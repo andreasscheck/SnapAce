@@ -125,6 +125,98 @@ header h1 {
 .dryer-btn.stop { background: var(--item); color: var(--text); }
 .dryer-btn.stop:hover { background: var(--error); color: #fff; }
 
+.gate-map {
+    max-width: 1000px;
+    margin: 0 auto 20px;
+    padding: 12px 16px;
+    background: var(--card);
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.gate-map-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.gate-map-header h2 { font-size: 16px; }
+
+.gate-map-source {
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 12px;
+    background: var(--item);
+    color: var(--muted);
+}
+
+.gate-map-source.ui { background: #4f3a2f; color: #ffc4a8; }
+
+.gate-map-rows {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 10px;
+}
+
+.gate-map-row {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px;
+    border-radius: 6px;
+    background: var(--item);
+    border: 1px solid transparent;
+}
+
+.gate-map-row.invalid { border-color: var(--error); }
+
+.gate-map-extruder {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.gate-map-tool { color: var(--muted); font-weight: 400; }
+
+.gate-map-row select {
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--card);
+    color: var(--text);
+    font-size: 13px;
+}
+
+.gate-map-row select:disabled { opacity: 0.6; }
+
+.gate-map-hint { font-size: 12px; color: var(--muted); min-height: 16px; }
+.gate-map-hint.error { color: var(--error); }
+.gate-map-hint.warning { color: var(--warning); }
+
+.gate-map-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+
+.dryer-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.gate-map-restart {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: 6px;
+    background: #4f4a2f;
+    color: var(--warning);
+    font-size: 13px;
+}
+
+.gate-map-restart[hidden] { display: none; }
+
 .content { max-width: 1000px; margin: 0 auto; }
 
 .gates-grid {

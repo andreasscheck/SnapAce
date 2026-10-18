@@ -1,6 +1,6 @@
 'use strict';
 
-const QUERY_OBJECTS = { ace: null };
+const QUERY_OBJECTS = { ace: null, print_stats: ['state'] };
 
 let ws = null;
 let wsReady = false;
@@ -21,13 +21,22 @@ let cachedAce = {
     slots: [{}, {}, {}, {}],
     feed_assist_index: -1,
     desired_feed_assist_index: -1,
+    pending_extruder_gate: [null, null, null, null],
+    gate_map_source: 'config',
+    gate_map_restart_required: false,
 };
+
+let printState = 'standby';
+// Per-extruder gate selections the user has changed but not saved yet;
+// null while the selects simply mirror the printer's mapping.
+let gateMapDraft = null;
 
 document.addEventListener('DOMContentLoaded', () => {
     if (initialized) return;
     initialized = true;
     initializeWebSocket();
     initializeDryerControls();
+    initializeGateMapControls();
 });
 
 function initializeDryerControls() {
@@ -98,6 +107,9 @@ function initializeWebSocket() {
         if (msg.method === 'notify_status_update') {
             const update = msg.params[0];
             if (update.ace) Object.assign(cachedAce, update.ace);
+            if (update.print_stats && update.print_stats.state) {
+                printState = update.print_stats.state;
+            }
             render();
             return;
         }
@@ -143,6 +155,9 @@ async function loadInitialData() {
         }
         const result = await sendRPC('printer.objects.query', { objects: QUERY_OBJECTS });
         if (result.status.ace) Object.assign(cachedAce, result.status.ace);
+        if (result.status.print_stats && result.status.print_stats.state) {
+            printState = result.status.print_stats.state;
+        }
         render();
     } catch (err) {
         showStatus(`Load failed: ${err.message}`, 'error');
@@ -165,6 +180,7 @@ function colorHex(rgb) {
 function render() {
     renderDisconnectedBanner();
     renderSummary();
+    renderGateMap();
     renderGates();
 }
 
@@ -388,6 +404,171 @@ async function toggleFeedAssist(index, currentlyActive) {
         }
     } catch (err) {
         showStatus(`Toggle feed assist failed: ${err.message}`, 'error');
+    }
+}
+
+function isPrinting() {
+    return printState === 'printing' || printState === 'paused';
+}
+
+function savedGateMap() {
+    return (cachedAce.pending_extruder_gate || [null, null, null, null]).slice(0, 4);
+}
+
+function currentGateMapSelection() {
+    return gateMapDraft ? gateMapDraft.slice() : savedGateMap();
+}
+
+function duplicateGates(mapping) {
+    const seen = new Set();
+    const dupes = new Set();
+    mapping.forEach(gate => {
+        if (gate == null) return;
+        if (seen.has(gate)) dupes.add(gate);
+        seen.add(gate);
+    });
+    return dupes;
+}
+
+function initializeGateMapControls() {
+    document.getElementById('gate-map-save-btn').addEventListener('click', saveGateMap);
+    document.getElementById('gate-map-reset-btn').addEventListener('click', resetGateMap);
+    document.getElementById('gate-map-restart-btn').addEventListener('click', restartKlipper);
+}
+
+let lastGateMapRowsKey = null;
+
+function renderGateMap() {
+    const selection = currentGateMapSelection();
+    const dupes = duplicateGates(selection);
+    const locked = !wsReady || isPrinting();
+
+    // render() runs on every ACE status update (about once a second);
+    // rebuilding the selects each time would close an open dropdown.
+    const rowsKey = JSON.stringify([selection, locked]);
+    if (rowsKey !== lastGateMapRowsKey) {
+        lastGateMapRowsKey = rowsKey;
+        renderGateMapRows(selection, dupes, locked);
+    }
+    renderGateMapState(selection, dupes, locked);
+}
+
+function renderGateMapRows(selection, dupes, locked) {
+    const rows = document.getElementById('gate-map-rows');
+    rows.innerHTML = '';
+    for (let e = 0; e < 4; e++) {
+        const row = document.createElement('label');
+        row.className = 'gate-map-row' + (dupes.has(selection[e]) ? ' invalid' : '');
+
+        const name = document.createElement('span');
+        name.className = 'gate-map-extruder';
+        name.textContent = `Extruder ${e + 1}`;
+        const tool = document.createElement('span');
+        tool.className = 'gate-map-tool';
+        tool.textContent = `T${e}`;
+        name.appendChild(tool);
+        row.appendChild(name);
+
+        const select = document.createElement('select');
+        select.disabled = locked;
+        const options = [['', 'Built-in feeder']];
+        for (let g = 0; g < 4; g++) options.push([String(g), `ACE Gate ${g + 1}`]);
+        options.forEach(([value, text]) => {
+            const opt = document.createElement('option');
+            opt.value = value;
+            opt.textContent = text;
+            select.appendChild(opt);
+        });
+        select.value = selection[e] == null ? '' : String(selection[e]);
+        select.addEventListener('change', () => {
+            const draft = currentGateMapSelection();
+            draft[e] = select.value === '' ? null : parseInt(select.value, 10);
+            gateMapDraft = draft;
+            renderGateMap();
+        });
+        row.appendChild(select);
+        rows.appendChild(row);
+    }
+}
+
+function renderGateMapState(selection, dupes, locked) {
+    const source = document.getElementById('gate-map-source');
+    const fromUi = cachedAce.gate_map_source === 'ui';
+    source.textContent = fromUi ? 'Saved in UI' : 'From ace.cfg';
+    source.className = 'gate-map-source' + (fromUi ? ' ui' : '');
+
+    const unsaved = gateMapDraft !== null &&
+        JSON.stringify(gateMapDraft) !== JSON.stringify(savedGateMap());
+    const hint = document.getElementById('gate-map-hint');
+    if (isPrinting()) {
+        hint.textContent = 'Mapping can only be changed while no print is running.';
+        hint.className = 'gate-map-hint';
+    } else if (dupes.size) {
+        hint.textContent = 'Each ACE gate can only feed one extruder.';
+        hint.className = 'gate-map-hint error';
+    } else if (unsaved) {
+        hint.textContent = 'Unsaved changes.';
+        hint.className = 'gate-map-hint warning';
+    } else {
+        hint.textContent = '';
+        hint.className = 'gate-map-hint';
+    }
+
+    document.getElementById('gate-map-save-btn').disabled = locked || dupes.size > 0 || !unsaved;
+    document.getElementById('gate-map-reset-btn').disabled = locked || !fromUi;
+
+    const restart = document.getElementById('gate-map-restart');
+    restart.hidden = !cachedAce.gate_map_restart_required;
+    document.getElementById('gate-map-restart-btn').disabled = locked;
+}
+
+function formatGateMap(mapping) {
+    const entries = mapping
+        .map((gate, extruder) => gate == null ? null : `${extruder}=${gate}`)
+        .filter(Boolean);
+    return entries.length ? entries.join(',') : 'none';
+}
+
+async function saveGateMap() {
+    const mapping = currentGateMapSelection();
+    if (duplicateGates(mapping).size) return;
+    try {
+        showStatus('Saving gate mapping…', 'info');
+        await sendGcode(`ACE_SET_GATE_MAP MAP="${formatGateMap(mapping)}"`);
+        gateMapDraft = null;
+        showStatus('Gate mapping saved — restart Klipper to apply', 'success');
+    } catch (err) {
+        showStatus(`Saving gate mapping failed: ${err.message}`, 'error');
+    }
+    render();
+}
+
+async function resetGateMap() {
+    if (!confirm('Drop the mapping saved in the UI and use extruder_gate_map from ace.cfg again?')) return;
+    try {
+        showStatus('Resetting gate mapping…', 'info');
+        await sendGcode('ACE_RESET_GATE_MAP');
+        gateMapDraft = null;
+        showStatus('Gate mapping reset to ace.cfg — restart Klipper to apply', 'success');
+    } catch (err) {
+        showStatus(`Reset failed: ${err.message}`, 'error');
+    }
+    render();
+}
+
+async function restartKlipper() {
+    if (isPrinting()) return;
+    if (!confirm('Restart Klipper now to apply the new gate mapping?')) return;
+    try {
+        showStatus('Restarting Klipper…', 'info');
+        await sendRPC('printer.firmware_restart');
+        showStatus('Klipper is restarting…', 'success');
+        // Klipper's objects are recreated, so the existing subscription
+        // goes stale - re-subscribe once it is back.
+        subscribed = false;
+        setTimeout(loadInitialData, 8000);
+    } catch (err) {
+        showStatus(`Restart failed: ${err.message}`, 'error');
     }
 }
 

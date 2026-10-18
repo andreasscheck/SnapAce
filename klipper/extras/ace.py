@@ -19,6 +19,7 @@ GATE_AVAILABLE = 1  # Available to load from either buffer or spool
 class BunnyAce:
     VARS_ACE_REVISION = 'ace__revision'
     VARS_GATE_PRELOADED = 'ace__gate_preloaded'
+    VARS_EXTRUDER_GATE_MAP = 'ace__extruder_gate_map'
 
     def __init__(self, config):
         self._connected = False
@@ -67,11 +68,18 @@ class BunnyAce:
         self.operation_timeout = config.getfloat(
             'operation_timeout', 30., above=0.)
         try:
-            self.extruder_gate_map = self._parse_extruder_gate_map(
+            self._config_extruder_gate_map = self._parse_extruder_gate_map(
                 config.get(
                     'extruder_gate_map', '0=0, 1=1, 2=2, 3=3'))
         except ValueError as e:
             raise config.error(str(e))
+        # A mapping saved from the /ace UI (ACE_SET_GATE_MAP) takes
+        # precedence over ace.cfg until it is reset with ACE_RESET_GATE_MAP.
+        self._saved_extruder_gate_map = self._load_saved_gate_map(
+            self.save_variables.allVariables.get(
+                self.VARS_EXTRUDER_GATE_MAP, None))
+        self.extruder_gate_map = list(
+            self._saved_extruder_gate_map or self._config_extruder_gate_map)
 
         self._callback_map = {}
         self._feed_assist_index = -1
@@ -170,6 +178,12 @@ class BunnyAce:
         self.gcode.register_command(
             'ACE_CHECK_JSON_STATUS', self.cmd_ACE_CHECK_JSON_STATUS,
             desc=self.cmd_ACE_CHECK_JSON_STATUS_help)
+        self.gcode.register_command(
+            'ACE_SET_GATE_MAP', self.cmd_ACE_SET_GATE_MAP,
+            desc=self.cmd_ACE_SET_GATE_MAP_help)
+        self.gcode.register_command(
+            'ACE_RESET_GATE_MAP', self.cmd_ACE_RESET_GATE_MAP,
+            desc=self.cmd_ACE_RESET_GATE_MAP_help)
 
     def _handle_connect(self):
         # Runs before klippy:ready so filament_detect's own startup read
@@ -646,6 +660,83 @@ class BunnyAce:
         gate = self.gate_for_extruder(extruder_num)
         return gate is not None and gate == self._desired_feed_assist_index
 
+    @staticmethod
+    def _validate_gate_map(mapping):
+        if (not isinstance(mapping, (list, tuple)) or len(mapping) != 4 or
+                any(gate is not None and (
+                    not isinstance(gate, int) or isinstance(gate, bool) or
+                    gate < 0 or gate > 3) for gate in mapping)):
+            raise ValueError(
+                'gate map must list a gate 0-3 or none for each of the 4 '
+                'extruders')
+        assigned_gates = [gate for gate in mapping if gate is not None]
+        if len(set(assigned_gates)) != len(assigned_gates):
+            raise ValueError(
+                'each ACE gate may only be assigned to one extruder')
+        return list(mapping)
+
+    def _load_saved_gate_map(self, value):
+        if value is None:
+            return None
+        try:
+            return self._validate_gate_map(value)
+        except ValueError as e:
+            logging.warning(
+                f'ACE: ignoring invalid saved {self.VARS_EXTRUDER_GATE_MAP} '
+                f'{value!r}: {e}')
+            return None
+
+    def _next_boot_gate_map(self):
+        return list(
+            self._saved_extruder_gate_map or self._config_extruder_gate_map)
+
+    def _check_gate_map_change_allowed(self, gcmd):
+        print_stats = self.printer.lookup_object('print_stats', None)
+        state = getattr(print_stats, 'state', None)
+        if state in ('printing', 'paused'):
+            raise gcmd.error(
+                'ACE gate map cannot be changed while a print is '
+                f'{state}')
+
+    cmd_ACE_SET_GATE_MAP_help = (
+        'Saves the extruder-to-ACE-gate mapping, e.g. MAP="0=2,1=3" '
+        '(unlisted extruders use the built-in feeder; MAP=none for none). '
+        'Takes effect after FIRMWARE_RESTART')
+
+    def cmd_ACE_SET_GATE_MAP(self, gcmd):
+        self._check_gate_map_change_allowed(gcmd)
+        try:
+            mapping = self._parse_extruder_gate_map(gcmd.get('MAP'))
+        except ValueError as e:
+            raise gcmd.error(str(e))
+        self._saved_extruder_gate_map = mapping
+        self.save_variable(
+            self.VARS_EXTRUDER_GATE_MAP, list(mapping), write=True)
+        gcmd.respond_info(
+            f'ACE gate map saved: {self._format_gate_map(mapping)} - '
+            'run FIRMWARE_RESTART to apply')
+
+    cmd_ACE_RESET_GATE_MAP_help = (
+        'Drops the gate mapping saved with ACE_SET_GATE_MAP so '
+        'extruder_gate_map from ace.cfg applies again after '
+        'FIRMWARE_RESTART')
+
+    def cmd_ACE_RESET_GATE_MAP(self, gcmd):
+        self._check_gate_map_change_allowed(gcmd)
+        self._saved_extruder_gate_map = None
+        self.delete_variable(self.VARS_EXTRUDER_GATE_MAP, write=True)
+        gcmd.respond_info(
+            'ACE gate map reset to ace.cfg '
+            f'({self._format_gate_map(self._config_extruder_gate_map)}) - '
+            'run FIRMWARE_RESTART to apply')
+
+    @staticmethod
+    def _format_gate_map(mapping):
+        entries = [f'{extruder}={gate}'
+                   for extruder, gate in enumerate(mapping)
+                   if gate is not None]
+        return ', '.join(entries) if entries else 'none'
+
     def manages_extruder(self, index):
         return self.gate_for_extruder(index) is not None
 
@@ -1054,6 +1145,14 @@ class BunnyAce:
             'dryer_status': self._info['dryer_status'],
             'gate_status': self.gate_status,
             'gate_extruder': [self.extruder_for_gate(i) for i in range(4)],
+            # Per-extruder gate the mapping uses after the next restart, and
+            # where it comes from ('ui' = saved via ACE_SET_GATE_MAP).
+            'pending_extruder_gate': self._next_boot_gate_map(),
+            'gate_map_source': (
+                'ui' if self._saved_extruder_gate_map is not None
+                else 'config'),
+            'gate_map_restart_required': (
+                self._next_boot_gate_map() != list(self.extruder_gate_map)),
             'slots': self._info['slots'],
             'feed_assist_index': self._feed_assist_index,
             'desired_feed_assist_index': self._desired_feed_assist_index,

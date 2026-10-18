@@ -83,11 +83,39 @@ def make_ace():
     ace._desired_feed_assist_index = -1
     ace._assist_reconcile_scheduled = False
     ace.extruder_gate_map = [0, 1, 2, 3]
+    ace._config_extruder_gate_map = [0, 1, 2, 3]
+    ace._saved_extruder_gate_map = None
     ace._gate_preloaded = [False, False, False, False]
     ace.feed_length = 600
     ace.feed_speed = 50
     ace.retract_length = 100
     ace.retract_speed = 20
+    return ace
+
+
+class FakeGCmd:
+    def __init__(self, **params):
+        self.params = params
+        self.messages = []
+
+    def get(self, name, default=None):
+        return self.params.get(name, default)
+
+    def error(self, message):
+        return Exception(message)
+
+    def respond_info(self, message):
+        self.messages.append(message)
+
+
+def make_gate_map_ace(print_state='standby'):
+    ace = make_ace()
+    ace.save_variables = types.SimpleNamespace(allVariables={})
+    ace.gcode.run_script_from_command = lambda script: None
+    print_stats = types.SimpleNamespace(state=print_state)
+    ace.printer.lookup_object = lambda name, default=None: (
+        print_stats if name == 'print_stats' else default)
+    ace.gate_status = [0, 0, 0, 0]
     return ace
 
 
@@ -148,6 +176,64 @@ class AceQueueTests(unittest.TestCase):
         self.assertEqual('PLA', status['slots'][0]['type'])
         self.assertEqual(2, status['slots'][0]['rfid'])
         self.assertEqual([255, 0, 0], status['slots'][0]['color'])
+
+    def test_set_gate_map_saves_and_requires_restart(self):
+        ace = make_gate_map_ace()
+
+        ace.cmd_ACE_SET_GATE_MAP(FakeGCmd(MAP='0=2,1=3,2=1'))
+
+        self.assertEqual(
+            [2, 3, 1, None],
+            ace.save_variables.allVariables[ace.VARS_EXTRUDER_GATE_MAP])
+        # The active mapping only changes after FIRMWARE_RESTART.
+        self.assertEqual([0, 1, 2, 3], ace.extruder_gate_map)
+        status = ace.get_status()
+        self.assertEqual([2, 3, 1, None], status['pending_extruder_gate'])
+        self.assertEqual('ui', status['gate_map_source'])
+        self.assertTrue(status['gate_map_restart_required'])
+
+    def test_set_gate_map_rejects_invalid_or_duplicate_gates(self):
+        ace = make_gate_map_ace()
+
+        for value in ('0=1,2=1', '0=4', 'garbage'):
+            with self.assertRaises(Exception):
+                ace.cmd_ACE_SET_GATE_MAP(FakeGCmd(MAP=value))
+        self.assertNotIn(
+            ace.VARS_EXTRUDER_GATE_MAP, ace.save_variables.allVariables)
+
+    def test_set_gate_map_refused_while_printing(self):
+        ace = make_gate_map_ace(print_state='printing')
+
+        with self.assertRaises(Exception):
+            ace.cmd_ACE_SET_GATE_MAP(FakeGCmd(MAP='0=2'))
+        self.assertNotIn(
+            ace.VARS_EXTRUDER_GATE_MAP, ace.save_variables.allVariables)
+
+    def test_reset_gate_map_falls_back_to_config(self):
+        ace = make_gate_map_ace()
+        ace._config_extruder_gate_map = [2, None, 1, 3]
+        ace.extruder_gate_map = [0, 1, 2, 3]
+        ace._saved_extruder_gate_map = [0, 1, 2, 3]
+        ace.save_variables.allVariables[ace.VARS_EXTRUDER_GATE_MAP] = [0, 1, 2, 3]
+
+        ace.cmd_ACE_RESET_GATE_MAP(FakeGCmd())
+
+        self.assertNotIn(
+            ace.VARS_EXTRUDER_GATE_MAP, ace.save_variables.allVariables)
+        status = ace.get_status()
+        self.assertEqual('config', status['gate_map_source'])
+        self.assertEqual([2, None, 1, 3], status['pending_extruder_gate'])
+        self.assertTrue(status['gate_map_restart_required'])
+
+    def test_saved_gate_map_is_validated_on_load(self):
+        ace = make_gate_map_ace()
+
+        self.assertEqual(
+            [2, None, 1, 3], ace._load_saved_gate_map([2, None, 1, 3]))
+        self.assertIsNone(ace._load_saved_gate_map([1, 1, None, None]))
+        self.assertIsNone(ace._load_saved_gate_map([0, 1]))
+        self.assertIsNone(ace._load_saved_gate_map('0=1'))
+        self.assertIsNone(ace._load_saved_gate_map(None))
 
     def test_status_reports_actual_serial_connection_state(self):
         ace = make_ace()

@@ -29,6 +29,23 @@
     <button id="dryer-stop-btn" class="dryer-btn stop">Stop Drying</button>
 </div>
 
+<section id="gate-map" class="gate-map">
+    <div class="gate-map-header">
+        <h2>Gate Mapping</h2>
+        <span id="gate-map-source" class="gate-map-source"></span>
+    </div>
+    <div id="gate-map-rows" class="gate-map-rows"></div>
+    <div id="gate-map-hint" class="gate-map-hint"></div>
+    <div class="gate-map-actions">
+        <button id="gate-map-save-btn" class="dryer-btn">Save Mapping</button>
+        <button id="gate-map-reset-btn" class="dryer-btn stop">Reset to ace.cfg</button>
+    </div>
+    <div id="gate-map-restart" class="gate-map-restart" hidden>
+        <span>Saved mapping takes effect after a Klipper restart.</span>
+        <button id="gate-map-restart-btn" class="dryer-btn">Restart Klipper now</button>
+    </div>
+</section>
+
 <main class="content">
     <div id="gates-grid" class="gates-grid"></div>
     <div id="status-message" class="status-message"></div>

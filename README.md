@@ -39,8 +39,8 @@ Integration of the Anycubic ACE Pro with the Snapmaker U1 printer as external fi
   to the printer's filament config.
 - Drives the ACE Pro's built-in dryer.
 - A status/control web UI at `/ace` — gate state, RFID data, feed
-  assist, manual jog, and dryer controls, live over Moonraker's existing
-  WebSocket API (see [Status UI](#status-ui-ace)).
+  assist, manual jog, dryer controls and the extruder-to-gate mapping, live
+  over Moonraker's existing WebSocket API (see [Status UI](#status-ui-ace)).
 - Removes 28 dead tool-change buttons (`T4`-`T31`) that stock firmware
   shows for extruders the U1 doesn't have (baked-in build only, see
   [Tool count cleanup](#tool-count-cleanup-baked-in-build-only)).
@@ -102,6 +102,13 @@ In this example, extruder 0 uses ACE gate 2 and extruder 2 uses ACE gate 0.
 Extruders 1 and 3 are not listed and therefore use the built-in feeder. Use
 `extruder_gate_map: none` to disable automatic ACE feeding for every extruder.
 
+The mapping can also be changed from the [Status UI](#status-ui-ace) (or
+with `ACE_SET_GATE_MAP MAP="0=2,2=0"`). That saves it to `ace_vars.cfg`, and
+from then on it takes precedence over `extruder_gate_map` in `ace.cfg` until
+it is reset with **Reset to ace.cfg** (`ACE_RESET_GATE_MAP`). Either way the
+new mapping only takes effect after a Klipper restart (`FIRMWARE_RESTART`),
+and it can't be changed while a print is running or paused.
+
 ### Alternative: bake SnapAce into a firmware image
 
 Instead of copying files over SSH, [scripts/build_custom_firmware.sh](scripts/build_custom_firmware.sh)
@@ -158,8 +165,9 @@ menu as **ACE Status**). It's a thin client over Moonraker's existing
 WebSocket API, not a new backend:
 [klipper/extras/ace.py](klipper/extras/ace.py)'s `get_status()` exposes the
 real serial connection state, per-gate `slots` (raw RFID/filament read) and
-`gate_extruder` mapping alongside `gate_status`, and [ace-ui/](ace-ui/) is a
-static page that renders and acts on them.
+`gate_extruder` mapping alongside `gate_status`, plus the saved mapping
+(`pending_extruder_gate`, `gate_map_source`, `gate_map_restart_required`),
+and [ace-ui/](ace-ui/) is a static page that renders and acts on them.
 
 <img src="./.github/img/ace-status.png" />
 
@@ -168,6 +176,15 @@ static page that renders and acts on them.
   ACE itself is unplugged or powered off), with a banner when disconnected.
 - **Dryer controls** — start/stop the ACE's dryer with a configurable
   temperature and duration.
+- **Gate mapping** — pick an ACE gate or the built-in feeder for each
+  extruder. Duplicate gates are flagged and can't be saved, the badge shows
+  whether the mapping comes from `ace.cfg` or was saved in the UI, and
+  **Reset to ace.cfg** drops the saved one. After saving, a **Restart
+  Klipper now** button applies it. All of it is locked while a print is
+  running or paused. See [Map extruders to ACE gates](#map-extruders-to-ace-gates).
+
+  <img src="./.github/img/ace-gate-map.png" />
+
 - **Per gate**: whether a spool is loaded, which extruder (if any) it
   feeds, the filament read off its RFID tag (material, brand, color), feed
   assist status (on/off/switching), and buttons to feed/retract 2cm or
@@ -272,6 +289,15 @@ for what that means for merging.
   and the ACE customizations needed no merge; the new paxx12
   `39-feature-filament-feeders` patch to `filament_feed.py` applies cleanly
   alongside SnapAce's.
+- `build_custom_firmware.sh` now force-fetches tags (paxx12 moves its
+  `rolling` tag on every build) and builds the rootfs in a Docker volume,
+  since Docker Desktop's macOS file sharing no longer preserves file
+  ownership.
+- Added the [gate mapping](#map-extruders-to-ace-gates) editor to the
+  `/ace` UI (`ACE_SET_GATE_MAP` / `ACE_RESET_GATE_MAP`, saved in
+  `ace_vars.cfg`).
+- Feed assist is no longer started at print start for an extruder that is
+  still parked; the print's first tool change enables the right gate.
 
 ### [v1.6.0-paxx12-22](https://github.com/andreasscheck/SnapAce/tree/feature/v1.6.0-paxx12-22) (current `main`)
 
