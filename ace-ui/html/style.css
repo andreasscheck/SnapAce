@@ -121,9 +121,10 @@ header h1 {
     cursor: pointer;
 }
 
-.dryer-btn:hover { background: var(--accent-hover, var(--accent)); opacity: 0.9; }
+.dryer-btn:hover:not(:disabled) { background: var(--accent-hover, var(--accent)); opacity: 0.9; }
 .dryer-btn.stop { background: var(--item); color: var(--text); }
-.dryer-btn.stop:hover { background: var(--error); color: #fff; }
+.dryer-btn.stop:hover:not(:disabled) { background: var(--error); color: #fff; }
+.dryer-field input:disabled { opacity: 0.6; }
 
 .gate-map {
     max-width: 1000px;

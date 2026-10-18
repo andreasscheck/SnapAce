@@ -95,6 +95,7 @@ function initializeWebSocket() {
         wsReady = false;
         subscribed = false;
         setConnectionStatus(false);
+        render();
         showStatus('Disconnected — reconnecting…', 'error');
         setTimeout(initializeWebSocket, 2000);
     };
@@ -180,6 +181,7 @@ function colorHex(rgb) {
 function render() {
     renderDisconnectedBanner();
     renderSummary();
+    renderDryerControls();
     renderGateMap();
     renderGates();
 }
@@ -225,6 +227,22 @@ function renderSummary() {
     addField('Status', strong(cachedAce.status || 'unknown'));
     addField('Temp', strong(`${cachedAce.temp ?? 0}°C`));
     addField('Dryer', strong(dryerText));
+}
+
+function isDrying() {
+    const dryer = cachedAce.dryer_status || {};
+    return Boolean(dryer.status) && dryer.status !== 'stop';
+}
+
+// Only offer the action that makes sense for the dryer's current state:
+// start (with editable temp/duration) while idle, stop while drying.
+function renderDryerControls() {
+    const drying = isDrying();
+    const available = wsReady && cachedAce.connected;
+    document.getElementById('dryer-start-btn').disabled = !available || drying;
+    document.getElementById('dryer-stop-btn').disabled = !available || !drying;
+    document.getElementById('dryer-temp').disabled = drying;
+    document.getElementById('dryer-duration').disabled = drying;
 }
 
 function renderGates() {
